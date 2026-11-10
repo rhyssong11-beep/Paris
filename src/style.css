@@ -81,7 +81,7 @@ button[aria-pressed='true'] { background: var(--accent); border-color: var(--acc
 #viewer .v-title { position: absolute; top: 18px; left: 22px; pointer-events: none; text-shadow: 0 1px 8px rgba(0, 0, 0, 0.6); }
 #viewer .v-title h2 { margin: 0; font-size: 28px; font-weight: 650; letter-spacing: 0.3px; }
 #viewer .v-title p { margin: 4px 0 0; font-size: 13px; opacity: 0.85; }
-#viewer .v-close { position: absolute; top: 16px; right: 18px; width: 42px; height: 42px; border-radius: 21px; font-size: 16px; }
+#viewer .v-close { position: absolute; top: 16px; right: 18px; width: 42px; height: 42px; border-radius: 21px; font-size: 16px; z-index: 4; }
 #viewer .v-bar {
   position: absolute; left: 50%; bottom: 44px; transform: translateX(-50%); display: flex; gap: 6px;
   background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 6px; backdrop-filter: blur(6px);
@@ -96,3 +96,16 @@ canvas#live.clickable { cursor: pointer; }
 #viewer.splat [data-act='day'], #viewer.splat [data-act='night'] { display: none; }
 #viewer .v-vignette { position: absolute; inset: 0; pointer-events: none; background: radial-gradient(ellipse at 50% 45%, transparent 55%, rgba(0, 0, 0, 0.38) 100%); }
 #viewer.splat .v-vignette { display: none; }
+#viewer.splat [data-act='twinkle'] { display: none; }
+.v-quality { display: flex; align-items: center; gap: 6px; padding: 0 5px; font-size: 12px; white-space: nowrap; }
+.v-quality select { font: inherit; color: var(--text); background: #1b2230; border: 1px solid var(--line); border-radius: 6px; padding: 6px; min-height: 34px; }
+#viewer button:focus-visible, #viewer select:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+#viewer button:disabled, #viewer select:disabled { opacity: 0.45; cursor: wait; }
+@media (max-width: 540px) {
+  #viewer .v-title { left: 16px; right: 70px; }
+  #viewer .v-title h2 { font-size: 23px; }
+  #viewer .v-bar { width: max-content; max-width: calc(100% - 20px); flex-wrap: wrap; justify-content: center; bottom: 48px; }
+  #viewer .v-bar button { font-size: 12px; padding: 6px 8px; }
+  #viewer .v-note { bottom: 140px; }
+  #viewer .v-hint { bottom: 12px; font-size: 10px; max-width: calc(100% - 20px); }
+}

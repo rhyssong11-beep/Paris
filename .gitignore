@@ -2,3 +2,5 @@ node_modules
 dist
 data/raw
 *.log
+test-results/
+playwright-report/

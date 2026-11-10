@@ -97,6 +97,23 @@ describe('a simulated day', () => {
     run(sim, DAY + 2.9 * 3600);
     expect(sim.stats.atHome).toBeGreaterThan(sim.agents.length * 0.97);
   }, 120000);
+
+  it('replans journeys when passengers reach a platform after its line closed', () => {
+    const sim = new Simulation(data, 1200, 1);
+    run(sim, 8.4 * 3600, 4);
+    const line = sim.metro.lines.findIndex((l) => l.ref === '1');
+    const approaching = sim.agents.filter((a) =>
+      a.state === State.Walk && a.steps.slice(a.stepIdx + 1).some((step) => 'ride' in step && step.ride.line === line),
+    );
+    expect(approaching.length).toBeGreaterThan(0);
+    sim.setLineClosed(line, true);
+    const until = sim.time + 3 * 3600;
+    while (sim.time < until) {
+      sim.step(4);
+      expect(sim.metro.waiting.every((q) => q.every((a) => a.leg?.line !== line))).toBe(true);
+    }
+    expect(approaching.every((a) => a.state === State.Idle || a.leg?.line !== line)).toBe(true);
+  });
 });
 
 describe('3D landmarks', () => {
@@ -121,6 +138,6 @@ describe('3D landmarks', () => {
     const json = JSON.parse(new TextDecoder().decode(glb.subarray(20, 20 + jsonLen)));
     expect(json.meshes.length).toBeGreaterThanOrEqual(10);
     const names = json.materials.map((m: { name: string }) => m.name);
-    expect(names).toEqual(expect.arrayContaining(['Tower_Iron', 'Tower_Glass', 'Plaza_Stone', 'Park_Foliage', 'Fountain_Water', 'Lamp_Glow']));
+    expect(names).toEqual(expect.arrayContaining(['Tower_Iron', 'Tower_Glass', 'Tower_GlassFloor', 'Plaza_Stone', 'Park_Foliage', 'Garden_Water', 'Lamp_Glow']));
   });
 });

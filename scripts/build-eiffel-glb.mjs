@@ -1,7 +1,11 @@
-// Generates the high-detail 3D Eiffel Tower + Champ de Mars plaza, fountains, trees & streetlamps
+// Generates the Eiffel Tower with open observation floors and a garden setting inspired by the site
 // model as a standard glTF 2.0 binary: public/models/eiffel.glb
 // Usage: node scripts/build-eiffel-glb.mjs
 import { mkdirSync, writeFileSync } from 'node:fs';
+import { NodeIO } from '@gltf-transform/core';
+import { EXTMeshoptCompression, KHRMeshQuantization } from '@gltf-transform/extensions';
+import { meshopt, weld } from '@gltf-transform/functions';
+import { MeshoptEncoder } from 'meshoptimizer';
 
 /**
  * Mesh builder collecting indexed triangles (POSITION, NORMAL, INDICES) per named PBR material.
@@ -135,6 +139,14 @@ class MeshBucket {
     if (capBottom) this.addQuad(b[0], b[3], b[2], b[1], [0, -1, 0]);
   }
 
+  addRing(size, opening, y, thickness) {
+    const strip = (size - opening) / 2;
+    for (const sign of [-1, 1]) {
+      this.addBox(0, y, sign * (opening + strip) / 2, size, thickness, strip, 0, true);
+      this.addBox(sign * (opening + strip) / 2, y, 0, strip, thickness, opening, 0, true);
+    }
+  }
+
   /** Tapered frustum (square/rectangular or n-gon) along Y-up. */
   addFrustum(cx0, y0, cz0, rx0, rz0, cx1, y1, cz1, rx1, rz1, segs = 16, rotY = 0, capTop = true, capBottom = false) {
     // CCW in (x, z) when viewed from +Y: x = +cos(a), z = -sin(a)
@@ -223,12 +235,18 @@ class MeshBucket {
 const buckets = {
   tower_iron: new MeshBucket('Tower_Iron', {
     baseColorFactor: [0.44, 0.33, 0.24, 1.0], // authentic Eiffel bronze-brown (painted iron: mostly matte)
-    metallicFactor: 0.3,
-    roughnessFactor: 0.62,
+    metallicFactor: 0.15,
+    roughnessFactor: 0.72,
+  }),
+  tower_fine_iron: new MeshBucket('Tower_FineIron', {
+    baseColorFactor: [0.32, 0.24, 0.18, 1], metallicFactor: 0.15, roughnessFactor: 0.73,
+  }),
+  tower_glass_floor: new MeshBucket('Tower_GlassFloor', {
+    baseColorFactor: [0.5, 0.62, 0.65, 0.28], metallicFactor: 0.05, roughnessFactor: 0.18, alphaMode: 'BLEND',
   }),
   tower_dark_iron: new MeshBucket('Tower_DarkIron', {
     baseColorFactor: [0.31, 0.23, 0.17, 1.0], // deep structural iron trim & decks
-    metallicFactor: 0.3,
+    metallicFactor: 0.15,
     roughnessFactor: 0.6,
   }),
   tower_gold: new MeshBucket('Tower_Gold', {
@@ -237,10 +255,10 @@ const buckets = {
     roughnessFactor: 0.24,
   }),
   tower_glass: new MeshBucket('Tower_Glass', {
-    baseColorFactor: [1.0, 0.89, 0.62, 1.0], // warm illuminated pavilion windows
+    baseColorFactor: [0.32, 0.43, 0.5, 0.48], // cool reflective glass; lit interiors are enabled only at night
     metallicFactor: 0.1,
     roughnessFactor: 0.2,
-    emissiveFactor: [0.45, 0.35, 0.15],
+    alphaMode: 'BLEND',
   }),
   tower_stone: new MeshBucket('Tower_Stone', {
     baseColorFactor: [0.84, 0.8, 0.72, 1.0], // limestone masonry anchor piers
@@ -282,7 +300,7 @@ const buckets = {
     metallicFactor: 0.02,
     roughnessFactor: 0.95,
   }),
-  fountain_water: new MeshBucket('Fountain_Water', {
+  fountain_water: new MeshBucket('Garden_Water', {
     baseColorFactor: [0.18, 0.49, 0.64, 1.0], // reflective water basins
     metallicFactor: 0.15,
     roughnessFactor: 0.12,
@@ -298,6 +316,8 @@ const buckets = {
 const {
   tower_iron: iron,
   tower_dark_iron: darkIron,
+  tower_fine_iron: fineIron,
+  tower_glass_floor: glassFloor,
   tower_gold: gold,
   tower_glass: glass,
   tower_stone: stone,
@@ -312,55 +332,30 @@ const {
   lamp_glow: lampGlow,
 } = buckets;
 
-// ------------------------------------------------------------------ 1. Champ de Mars Plaza, Fountains, Trees & Streetlamps
+// ------------------------------------------------------------------ 1. Esplanade and east/west gardens
+// A restrained site study, not a surveyed digital twin. +z points towards the Seine.
 {
-  // Octagonal / circular grand esplanade base (radius 185 m)
-  plaza.addFrustum(0, 0, 0, 185, 185, 0, 0.8, 0, 184, 184, 48, 0, true, true);
-  curb.addFrustum(0, 0.8, 0, 142, 142, 0, 1.25, 0, 141, 141, 48, 0, true, false);
-  plaza.addFrustum(0, 1.25, 0, 138, 138, 0, 1.5, 0, 137.5, 137.5, 48, 0, true, false);
-
-  // Cross-axial ceremonial walkways under the tower
-  for (const rot of [0, Math.PI / 2]) {
-    plaza.addBox(0, 1.5, 0, 38, 0.25, 290, rot);
-    curb.addBox(0, 1.5, 0, 40.5, 0.18, 290, rot);
-  }
-  // Central decorative compass rose medallion directly beneath the tower
-  curb.addFrustum(0, 1.5, 0, 26, 26, 0, 1.85, 0, 25.5, 25.5, 32, 0, true, false);
-  plaza.addFrustum(0, 1.85, 0, 22, 22, 0, 2.05, 0, 21.5, 21.5, 32, 0, true, false);
-  gold.addFrustum(0, 2.05, 0, 6.5, 6.5, 0, 2.25, 0, 6.2, 6.2, 16, 0, true, false);
-
-  // Four formal French parterre garden quadrants with manicured lawns, curbs, and reflecting fountains
-  for (const sx of [-1, 1]) {
-    for (const sz of [-1, 1]) {
-      const qx = sx * 68;
-      const qz = sz * 68;
-      curb.addBox(qx, 1.4, qz, 76, 0.65, 76);
-      lawn.addBox(qx, 2.05, qz, 72, 0.35, 72);
-      // Inner diagonal & cross gravel paths
-      plaza.addBox(qx, 2.4, qz, 72, 0.12, 7.5);
-      plaza.addBox(qx, 2.4, qz, 7.5, 0.12, 72);
-
-      // Monumental circular & octagonal fountain basin in each quadrant
-      stone.addFrustum(qx, 2.4, qz, 16.5, 16.5, qx, 3.8, qz, 16, 16, 24, 0, true, false);
-      water.addFrustum(qx, 3.8, qz, 14.5, 14.5, qx, 4.15, qz, 14.5, 14.5, 24, 0, true, false);
-      // Two-tier bronze fountain pedestal & glowing water jets
-      darkIron.addFrustum(qx, 4.15, qz, 3.5, 3.5, qx, 6.8, qz, 2.2, 2.2, 14, 0, true, false);
-      darkIron.addFrustum(qx, 6.5, qz, 6.5, 6.5, qx, 7.2, qz, 5.2, 5.2, 16, 0, true, false);
-      darkIron.addFrustum(qx, 7.2, qz, 1.8, 1.8, qx, 9.8, qz, 1.1, 1.1, 12, 0, true, false);
-      gold.addFrustum(qx, 9.5, qz, 3.4, 3.4, qx, 10.1, qz, 2.6, 2.6, 14, 0, true, false);
-      lampGlow.addDome(qx, 10.1, qz, 2.2, 4.2, 12, 4);
-      // Ring of 8 perimeter fountain nozzles & underwater lights
-      for (let k = 0; k < 8; k++) {
-        const a = (k / 8) * Math.PI * 2;
-        const nx = qx + Math.cos(a) * 10.5;
-        const nz = qz + Math.sin(a) * 10.5;
-        lampGlow.addSphere(nx, 4.3, nz, 0.65, 8, 3);
-      }
+  // Ground stays flush with the surrounding city instead of sitting on a circular display plinth.
+  plaza.addBox(0, -0.25, 0, 154, 0.5, 154, 0, true);
+  for (const x of [-78, 78]) curb.addBox(x, 0, 0, 1.2, 0.12, 168);
+  plaza.addBox(0, -0.12, 115, 66, 0.15, 90);
+  plaza.addBox(0, -0.12, -155, 30, 0.15, 180);
+  // Two landscaped gardens beside the esplanade, with softly irregular ponds.
+  for (const side of [-1, 1]) {
+    lawn.addBox(side * 112, -0.18, -10, 66, 0.2, 220);
+    const cx = side * 115, cz = side > 0 ? 22 : -26;
+    const ring = Array.from({ length: 32 }, (_, i) => {
+      const a = i / 32 * Math.PI * 2;
+      const r = 1 + 0.1 * Math.sin(a * 3 + side);
+      return [cx + Math.cos(a) * 19 * r, 0.03, cz + Math.sin(a) * 30 * r];
+    });
+    for (let i = 0; i < ring.length; i++) {
+      const j = (i + 1) % ring.length;
+      water.addTri([cx, 0.03, cz], ring[j], ring[i], [0, 1, 0]);
+      curb.addBeam(ring[i], ring[j], 0.28, 0.28, 4);
     }
+    for (const z of [-80, 75]) plaza.addBox(side * 112, 0.05, z, 67, 0.05, 4.5);
   }
-
-  // Helper to place a Parisian chestnut / plane tree. Every tree is a little different: its size,
-  // lean, branching and the lumps of its crown come from a seeded random stream.
   let treeSeed = 7;
   const rnd = () => {
     treeSeed = (Math.imul(treeSeed, 1664525) + 1013904223) >>> 0;
@@ -387,7 +382,7 @@ const {
     }
     trunk.addBeam(fork, [tx + lean[0] * 1.6, crownY + r * 0.35, tz + lean[1] * 1.6], 0.32, 0.1, 5);
     // Crown: a shaded core, a ring of leafy masses around it and sunlit clumps on top.
-    foliageDark.addBlob(tx + lean[0], crownY - r * 0.12, tz + lean[1], r * 0.82, r * 0.7, r * 0.82, rnd() * 50);
+    foliageDark.addBlob(tx + lean[0], crownY - r * 0.12, tz + lean[1], r * 0.82, r * 0.7, r * 0.82, rnd() * 50, 8, 5);
     const lobes = 5 + Math.floor(rnd() * 3);
     for (let k = 0; k < lobes; k++) {
       const a = a0 + (k / lobes) * Math.PI * 2 + (rnd() - 0.5) * 0.5;
@@ -396,10 +391,10 @@ const {
       const y = crownY + (rnd() - 0.45) * r * 0.5;
       // The sun in the viewer comes from -x / +z, so lobes on that side get the lighter leaves.
       const sunny = -Math.cos(a) * 0.8 + Math.sin(a) * 0.55 > 0.25;
-      (sunny ? foliageLight : foliage).addBlob(tx + lean[0] + Math.cos(a) * d, y, tz + lean[1] + Math.sin(a) * d, rr, rr * (0.78 + rnd() * 0.2), rr, rnd() * 50, 10, 6);
+      (sunny ? foliageLight : foliage).addBlob(tx + lean[0] + Math.cos(a) * d, y, tz + lean[1] + Math.sin(a) * d, rr, rr * (0.78 + rnd() * 0.2), rr, rnd() * 50, 7, 4);
     }
-    foliage.addBlob(tx + lean[0] * 1.3, crownY + r * 0.42, tz + lean[1] * 1.3, r * 0.62, r * 0.5, r * 0.62, rnd() * 50, 10, 6);
-    foliageLight.addBlob(tx + lean[0] * 1.4 - r * 0.15, crownY + r * 0.62, tz + lean[1] * 1.4 + r * 0.1, r * 0.4, r * 0.32, r * 0.4, rnd() * 50, 9, 5);
+    foliage.addBlob(tx + lean[0] * 1.3, crownY + r * 0.42, tz + lean[1] * 1.3, r * 0.62, r * 0.5, r * 0.62, rnd() * 50, 7, 4);
+    foliageLight.addBlob(tx + lean[0] * 1.4 - r * 0.15, crownY + r * 0.62, tz + lean[1] * 1.4 + r * 0.1, r * 0.4, r * 0.32, r * 0.4, rnd() * 50, 6, 4);
   };
 
   // Helper to place a Belle Époque Parisian double/triple globe streetlamp
@@ -407,23 +402,24 @@ const {
     darkIron.addFrustum(lx, baseY, lz, 0.55, 0.55, lx, baseY + 1.4, lz, 0.32, 0.32, 8);
     darkIron.addFrustum(lx, baseY + 1.4, lz, 0.18, 0.18, lx, baseY + 6.8, lz, 0.12, 0.12, 8);
     gold.addFrustum(lx, baseY + 6.5, lz, 0.45, 0.45, lx, baseY + 6.8, lz, 0.45, 0.45, 8);
-    lampGlow.addSphere(lx, baseY + 7.35, lz, 0.62, 10, 4);
+    lampGlow.addSphere(lx, baseY + 7.35, lz, 0.38, 6, 2);
   };
 
-  // Tree rows and Belle Époque streetlamps lining the grand avenues and outer promenade ring
-  for (const d of [-102, -82, -54, 54, 82, 102]) {
-    for (const s of [-1, 1]) {
-      addTree(d, s * 25.5, 1.5, 14, 5.4);
-      addTree(s * 25.5, d, 1.5, 14, 5.4);
-      addStreetlamp(d, s * 19.5, 1.75);
-      addStreetlamp(s * 19.5, d, 1.75);
+
+  // Planting is clustered and asymmetric around the two ponds, leaving the tower's approaches open.
+  for (const side of [-1, 1]) {
+    for (let i = 0; i < 24; i++) {
+      const z = -108 + i * 9 + (rnd() - 0.5) * 7;
+      const x = side * (87 + rnd() * 57);
+      const pondZ = side > 0 ? 22 : -26;
+      if (((x - side * 115) / 24) ** 2 + ((z - pondZ) / 36) ** 2 < 1) continue;
+      addTree(x, z, 0, 12 + rnd() * 5, 4 + rnd() * 2);
     }
-  }
-  for (let i = 0; i < 20; i++) {
-    const a = ((i + 0.5) / 20) * Math.PI * 2;
-    if (Math.abs(Math.cos(a)) > 0.95 || Math.abs(Math.sin(a)) > 0.95) continue;
-    addTree(Math.cos(a) * 124, Math.sin(a) * 124, 1.5, 15, 5.8);
-    addStreetlamp(Math.cos(a) * 114, Math.sin(a) * 114, 1.5);
+    for (const z of [-100, -58, -8, 45, 95]) addStreetlamp(side * 80, z, 0);
+    for (const z of [-66, -45, 60, 83]) {
+      curb.addBox(side * 86, 0.5, z, 4.5, 0.15, 1.2);
+      for (const dx of [-1.7, 1.7]) darkIron.addBox(side * 86 + dx, 0, z, 0.12, 0.5, 0.7);
+    }
   }
 }
 
@@ -432,12 +428,12 @@ const {
   // Accurate Gustave Eiffel profile curves:
   // Outer half-width of the tower at height y (base span = 124.9 m -> half-width 62.45 m at y=0)
   const outer = (y) => {
-    if (y <= 57) return 62.45 - (62.45 - 35.5) * (y / 57) ** 0.88;
-    if (y <= 115) return 35.5 - (35.5 - 19.5) * ((y - 57) / (115 - 57)) ** 0.9;
-    return 5.0 + 14.5 * Math.exp(-(y - 115) / 68) * (1 - (y - 115) / 240);
+    if (y <= 57.63) return 62.45 - (62.45 - 35.5) * (y / 57.63) ** 0.92;
+    if (y <= 115.73) return 35.5 - (35.5 - 19.5) * ((y - 57.63) / (115.73 - 57.63)) ** 0.95;
+    return 5.0 + 14.5 * Math.exp(-(y - 115.73) / 68) * (1 - (y - 115.73) / 240);
   };
   // Half-width of each of the 4 inclined legs at height y (0..115 m)
-  const legHalf = (y) => 12.6 - (12.6 - 7.8) * (y / 115);
+  const legHalf = (y) => 12.6 - (12.6 - 7.8) * (y / 115.73);
 
   // Helper: build a detailed cross-braced structural bay between heights y0 and y1
   // with corner box girders, horizontal frame, primary X-bracing, and secondary diamond/Warren sub-trusses.
@@ -484,19 +480,19 @@ const {
 
         // Horizontal perimeter struts
         iron.addBeam(a1, b1, braceR * 1.05, braceR * 1.05, 4);
-        darkIron.addBeam(am, bm, braceR * 0.65, braceR * 0.65, 4);
+        fineIron.addBeam(am, bm, braceR * 0.65, braceR * 0.65, 4);
         // Primary St. Andrew's X-bracing
         iron.addBeam(a0, b1, braceR * 0.85, braceR * 0.85, 4);
         iron.addBeam(b0, a1, braceR * 0.85, braceR * 0.85, 4);
         // Secondary diamond lattice & vertical web stiffeners
-        darkIron.addBeam(botMid, topMid, braceR * 0.55, braceR * 0.55, 4);
-        darkIron.addBeam(am, topMid, braceR * 0.5, braceR * 0.5, 4);
-        darkIron.addBeam(bm, topMid, braceR * 0.5, braceR * 0.5, 4);
-        darkIron.addBeam(am, botMid, braceR * 0.5, braceR * 0.5, 4);
-        darkIron.addBeam(bm, botMid, braceR * 0.5, braceR * 0.5, 4);
+        fineIron.addBeam(botMid, topMid, braceR * 0.55, braceR * 0.55, 4);
+        fineIron.addBeam(am, topMid, braceR * 0.5, braceR * 0.5, 4);
+        fineIron.addBeam(bm, topMid, braceR * 0.5, braceR * 0.5, 4);
+        fineIron.addBeam(am, botMid, braceR * 0.5, braceR * 0.5, 4);
+        fineIron.addBeam(bm, botMid, braceR * 0.5, braceR * 0.5, 4);
         // Internal cross-tie
         if (s === subDivs - 1) {
-          darkIron.addBeam(a1, pt((i + 2) % 4, t1), braceR * 0.45, braceR * 0.45, 4);
+          fineIron.addBeam(a1, pt((i + 2) % 4, t1), braceR * 0.45, braceR * 0.45, 4);
         }
         void center;
       }
@@ -504,7 +500,7 @@ const {
   };
 
   // ---------------------------------------------------------------- 2A. Four Masonry Foundations & Inclined Legs (0..115 m)
-  const legStages = [3.5, 10, 17.5, 25, 33, 41, 49, 57, 66, 75.5, 85, 95, 105, 115];
+  const legStages = [3.5, 10, 17.5, 25, 33, 41, 49, 57.63, 66, 75.5, 85, 95, 105, 115.73];
   for (const [sx, sz] of [
     [1, 1],
     [1, -1],
@@ -517,9 +513,9 @@ const {
     };
     const [bx, bz] = cAt(0);
     // Stepped stone foundation piers with cornices and iron anchor shoes
-    stone.addBox(bx, 1.5, bz, 30, 2.2, 30, 0);
-    stone.addBox(bx, 3.7, bz, 27.5, 2.0, 27.5, 0);
-    curb.addBox(bx, 5.7, bz, 28.5, 0.7, 28.5, 0);
+    stone.addBox(bx, 0, bz, 28, 1.5, 28, 0);
+    stone.addBox(bx, 1.5, bz, 26, 1.0, 26, 0);
+    curb.addBox(bx, 2.5, bz, 26.5, 0.4, 26.5, 0);
     for (const [cx, cz] of [
       [-1, -1],
       [1, -1],
@@ -528,8 +524,8 @@ const {
     ]) {
       const px = bx + cx * (legHalf(0) - 1);
       const pz = bz + cz * (legHalf(0) - 1);
-      stone.addBox(px, 5.8, pz, 6.2, 2.4, 6.2);
-      darkIron.addFrustum(px, 8.2, pz, 2.6, 2.6, px, 9.6, pz, 1.8, 1.8, 8);
+      stone.addBox(px, 2.5, pz, 4.8, 0.6, 4.8);
+      darkIron.addFrustum(px, 3.1, pz, 1.7, 1.7, px, 4.1, pz, 1.3, 1.3, 8);
     }
 
     // Build all 13 inclined lattice stages per leg + internal inclined elevator tracks
@@ -544,8 +540,8 @@ const {
         legHalf(y0),
         cAt(y1),
         legHalf(y1),
-        belowFirst ? 0.85 : 0.72,
-        belowFirst ? 0.42 : 0.36,
+        belowFirst ? 0.72 : 0.62,
+        belowFirst ? 0.34 : 0.29,
         2,
       );
       // Inclined double-rail elevator track running through the centre of each leg
@@ -590,76 +586,77 @@ const {
         iron.addBeam(pL0, pL1, 0.62, 0.62, 6);
         iron.addBeam(pH0, pH1, 0.55, 0.55, 6);
         // Radial & diagonal web struts between inner and outer arch rings
-        darkIron.addBeam(pL0, pH0, 0.34, 0.34, 4);
-        darkIron.addBeam(pL0, pH1, 0.3, 0.3, 4);
-        darkIron.addBeam(pH0, pL1, 0.3, 0.3, 4);
+        fineIron.addBeam(pL0, pH0, 0.34, 0.34, 4);
+        fineIron.addBeam(pL0, pH1, 0.3, 0.3, 4);
+        fineIron.addBeam(pH0, pL1, 0.3, 0.3, 4);
         // Spandrel vertical & diagonal hangers up to the 1st platform soffit (y = 55 m)
         if (i % 2 === 0) {
           const pTop = rotPt(x0, 55, outer(55) - 2.2 + zOff);
-          darkIron.addBeam(pH0, pTop, 0.32, 0.32, 4);
+          fineIron.addBeam(pH0, pTop, 0.32, 0.32, 4);
           if (i + 2 <= archSegs) {
             const a2 = ((i + 2) / archSegs) * Math.PI;
             const pTop2 = rotPt(Math.cos(a2) * span, 55, outer(55) - 2.2 + zOff);
-            darkIron.addBeam(pH0, pTop2, 0.26, 0.26, 4);
+            fineIron.addBeam(pH0, pTop2, 0.26, 0.26, 4);
           }
         }
       }
       // Cross-ties joining the front and back planes of the arch box-section
       const pFront = rotPt(x0, yLow0, zLow0 + 2.8);
       const pBack = rotPt(x0, yLow0, zLow0 - 2.8);
-      darkIron.addBeam(pFront, pBack, 0.3, 0.3, 4);
+      fineIron.addBeam(pFront, pBack, 0.3, 0.3, 4);
     }
   }
 
-  // ---------------------------------------------------------------- 2C. First Platform (57 m): Cantilever Deck, Scientific Frieze & Pavilions
+  // ---------------------------------------------------------------- 2C. Open first floor (57.63 m)
   {
-    const w1 = outer(57) * 2 + 7; // ~78 m square deck
-    darkIron.addBox(0, 54.5, 0, w1, 2.2, w1, 0, true);
-    iron.addBox(0, 56.7, 0, w1 + 2.4, 1.4, w1 + 2.4, 0, true);
-    // Golden frieze of the 72 French scientists' names around all four sides
-    for (let k = -8; k <= 8; k++) {
-      const pos = k * 4.2;
-      const edge = w1 / 2 + 1.3;
-      gold.addBox(pos, 55.2, edge, 2.6, 1.1, 0.4);
-      gold.addBox(pos, 55.2, -edge, 2.6, 1.1, 0.4);
-      gold.addBox(edge, 55.2, pos, 0.4, 1.1, 2.6);
-      gold.addBox(-edge, 55.2, pos, 0.4, 1.1, 2.6);
-    }
-    // Central hollow courtyard opening on the 1st floor framed by 4 glazed restaurant pavilions (Madame Brasserie)
+    const level = 57.63, size = 76, opening = 32;
+    darkIron.addRing(size, opening, level - 2.1, 1.3);
+    iron.addRing(size + 1, opening, level - 0.8, 0.8);
+    glassFloor.addRing(opening + 4.2, opening, level + 0.04, 0.12);
     for (let side = 0; side < 4; side++) {
-      const rot = (side * Math.PI) / 2;
-      const c = Math.cos(rot);
-      const s = Math.sin(rot);
-      const px = s * 25;
-      const pz = c * 25;
-      darkIron.addBox(px, 58.1, pz, 42, 1.0, 14, rot);
-      glass.addBox(px, 59.1, pz, 39, 4.2, 11.5, rot); // warmly glowing restaurant windows
-      iron.addBox(px, 63.3, pz, 43, 1.2, 15, rot);
-      // Perimeter observation railing posts
-      for (let r = -36; r <= 36; r += 4.5) {
-        const rx = r * c + (w1 / 2 + 0.6) * s;
-        const rz = -r * s + (w1 / 2 + 0.6) * c;
-        darkIron.addBox(rx, 58.1, rz, 0.45, 2.2, 0.45);
+      const rot = side * Math.PI / 2, c = Math.cos(rot), s = Math.sin(rot);
+      const point = (x, y, z) => [x * c - z * s, y, x * s + z * c];
+      // Narrow pavilions leave the central void open; glazing is divided by dark mullions.
+      const px = -s * 28, pz = c * 28;
+      darkIron.addBox(px, level + 0.12, pz, 41, 0.35, 10, rot);
+      glass.addBox(px, level + 0.47, pz, 39, 3.2, 8.5, rot);
+      iron.addBox(px, level + 3.67, pz, 41, 0.45, 10, rot);
+      for (let x = -19; x <= 19; x += 3.8) {
+        darkIron.addBeam(point(x, level + 0.47, 32.3), point(x, level + 3.67, 32.3), 0.075, 0.075, 4);
+      }
+      for (const z of [size / 2, opening / 2]) {
+        for (let x = -size / 2; x <= size / 2; x += 3.8) {
+          if (z === opening / 2 && Math.abs(x) > opening / 2) continue;
+          fineIron.addBeam(point(x, level, z), point(x, level + 1.2, z), 0.055, 0.055, 4);
+        }
+        const half = z === opening / 2 ? opening / 2 : size / 2;
+        fineIron.addBeam(point(-half, level + 1.2, z), point(half, level + 1.2, z), 0.06, 0.06, 4);
+      }
+      // 18 plaques on each side, represented as restrained bronze accents.
+      for (let k = 0; k < 18; k++) {
+        const [x, y, z] = point(-34 + k * 4, level - 1.6, size / 2 + 0.35);
+        gold.addBox(x, y, z, 2.2, 0.45, 0.12, rot);
       }
     }
-    darkIron.addBox(0, 64.5, 0, w1 - 4, 1.1, w1 - 4);
   }
 
-  // ---------------------------------------------------------------- 2D. Intermediate Connecting Gallery (86 m) & Second Platform (115 m)
+  // ---------------------------------------------------------------- 2D. Light connecting frame and second floor (115.73 m)
   {
-    // 86 m intermediate structural ring & elevator transfer bridge
-    const wMid = outer(86) * 2 + 2;
-    darkIron.addBox(0, 84.5, 0, wMid, 2.2, wMid, 0, true);
-    iron.addBox(0, 86.7, 0, wMid - 4, 1.0, wMid - 4);
-
-    // 115 m Second Platform: two-tiered observation deck + Le Jules Verne panoramic windows
-    const w2 = outer(115) * 2 + 6.5; // ~45.5 m
-    darkIron.addBox(0, 113.5, 0, w2, 2.0, w2, 0, true);
-    iron.addBox(0, 115.5, 0, w2 + 2.2, 1.2, w2 + 2.2, 0, true);
-    glass.addBox(0, 116.7, 0, w2 - 3.5, 3.6, w2 - 3.5, 0); // glowing lower observation & restaurant gallery
-    darkIron.addBox(0, 120.3, 0, w2, 1.3, w2, 0, true);
-    glass.addBox(0, 121.6, 0, w2 - 9, 2.8, w2 - 9, 0); // upper observation deck windows
-    iron.addBox(0, 124.4, 0, w2 - 6, 1.2, w2 - 6, 0, true);
+    // Intermediate bracing is an open perimeter, never a solid extra floor.
+    fineIron.addRing(outer(86) * 2, outer(86) * 2 - 0.65, 85.8, 0.35);
+    const level = 115.73, size = 44;
+    darkIron.addRing(size, 9, level - 1.8, 1.1);
+    iron.addRing(size + 1.3, 9, level - 0.7, 0.7);
+    for (let side = 0; side < 4; side++) {
+      const rot = side * Math.PI / 2, c = Math.cos(rot), s = Math.sin(rot);
+      glass.addBox(-s * 15.5, level + 0.2, c * 15.5, 34, 2.6, 8, rot);
+      darkIron.addBox(-s * 15.5, level + 2.8, c * 15.5, 35, 0.45, 9, rot);
+      for (let x = -20; x <= 20; x += 2.5) {
+        const px = x * c - size / 2 * s, pz = x * s + size / 2 * c;
+        fineIron.addBox(px, level, pz, 0.1, 1.3, 0.1);
+      }
+    }
+    iron.addRing(37, 10, level + 4.0, 0.55);
   }
 
   // ---------------------------------------------------------------- 2E. Upper Tapering Shaft (115..276 m) + Central Elevator Core
@@ -681,31 +678,27 @@ const {
     }
   }
 
-  // ---------------------------------------------------------------- 2F. Summit (3rd Platform, Gustave Eiffel's Office, Cupola, Beacon & 330 m Spire)
+  // ---------------------------------------------------------------- 2F. Summit observation decks and antenna
   {
-    // Cantilevered summit bracket & indoor panoramic lounge (275..283 m)
-    darkIron.addFrustum(0, 273.5, 0, 11.5, 11.5, 0, 276, 0, 16.5, 16.5, 4, Math.PI / 4, true, true);
-    iron.addBox(0, 276, 0, 18.5, 1.4, 18.5, 0, true);
-    glass.addBox(0, 277.4, 0, 15.5, 4.2, 15.5, 0);
-    darkIron.addBox(0, 281.6, 0, 17.8, 1.3, 17.8, 0, true);
-    // Open-air summit viewing deck & Gustave Eiffel's private apartment cabin
-    glass.addFrustum(0, 282.9, 0, 8.2, 8.2, 0, 287.5, 0, 7.6, 7.6, 12);
-    iron.addFrustum(0, 287.5, 0, 8.8, 8.8, 0, 289, 0, 8.2, 8.2, 12, 0, true, true);
-
-    // Arched lantern cupola, golden beacon housing & glowing lighthouse core (289..301 m)
-    iron.addDome(0, 289, 0, 7.2, 7.5, 16, 6);
-    gold.addFrustum(0, 296, 0, 3.8, 3.8, 0, 298.5, 0, 3.2, 3.2, 16);
-    lampGlow.addFrustum(0, 298.5, 0, 2.8, 2.8, 0, 302.5, 0, 2.5, 2.5, 16);
-    gold.addDome(0, 302.5, 0, 3.0, 2.8, 16, 5);
-
-    // 330 m broadcast antenna spire with dipole telemetry rings
-    iron.addFrustum(0, 305, 0, 1.5, 1.5, 0, 318, 0, 0.75, 0.75, 12);
-    gold.addFrustum(0, 318, 0, 0.75, 0.75, 0, 330, 0, 0.22, 0.22, 10);
-    for (const ay of [308, 312, 316, 321, 325]) {
-      const ar = 2.6 - ((ay - 308) / 20) * 1.4;
-      darkIron.addFrustum(0, ay, 0, ar, ar, 0, ay + 0.45, 0, ar, ar, 12, 0, true, true);
+    darkIron.addFrustum(0, 273.5, 0, 6.7, 6.7, 0, 276.13, 0, 8.5, 8.5, 4, Math.PI / 4, true, true);
+    iron.addRing(17.8, 5, 276.13, 0.65);
+    glass.addBox(0, 276.78, 0, 12.5, 3.0, 12.5);
+    darkIron.addBox(0, 279.78, 0, 15.8, 0.55, 15.8);
+    for (const sign of [-1, 1]) for (let x = -7.5; x <= 7.5; x += 1.5) {
+      fineIron.addBox(x, 280.33, sign * 7.5, 0.08, 1.25, 0.08);
+      fineIron.addBox(sign * 7.5, 280.33, x, 0.08, 1.25, 0.08);
     }
-    lampGlow.addSphere(0, 330, 0, 0.55, 10, 4);
+    darkIron.addFrustum(0, 280.33, 0, 4.5, 4.5, 0, 292, 0, 2.8, 2.8, 8);
+    iron.addFrustum(0, 292, 0, 2.8, 2.8, 0, 301, 0, 1.7, 1.7, 8);
+    darkIron.addBox(0, 301, 0, 4.5, 1.0, 4.5);
+    lampGlow.addBox(0, 302, 0, 1.7, 0.5, 1.7);
+    iron.addFrustum(0, 302.5, 0, 1.2, 1.2, 0, 318, 0, 0.55, 0.55, 8);
+    iron.addFrustum(0, 318, 0, 0.55, 0.55, 0, 329.6, 0, 0.15, 0.15, 6);
+    for (const ay of [308, 312, 316, 321, 325]) {
+      const ar = 2.1 - (ay - 308) / 20;
+      fineIron.addFrustum(0, ay, 0, ar, ar, 0, ay + 0.22, 0, ar, ar, 8);
+    }
+    lampGlow.addSphere(0, 329.6, 0, 0.4, 6, 2);
   }
 }
 
@@ -792,6 +785,7 @@ function packGlb(bucketList) {
         metallicFactor: b.mat.metallicFactor,
         roughnessFactor: b.mat.roughnessFactor,
       },
+      ...(b.mat.alphaMode ? { alphaMode: b.mat.alphaMode } : {}),
       ...(b.mat.emissiveFactor ? { emissiveFactor: b.mat.emissiveFactor } : {}),
     });
 
@@ -856,7 +850,13 @@ function packGlb(bucketList) {
 const dir = new URL('../public/models/', import.meta.url);
 mkdirSync(dir, { recursive: true });
 const { out, totalTris, totalVerts, meshCount } = packGlb(Object.values(buckets));
-writeFileSync(new URL('eiffel.glb', dir), out);
+await MeshoptEncoder.ready;
+const io = new NodeIO().registerExtensions([EXTMeshoptCompression, KHRMeshQuantization])
+  .registerDependencies({ 'meshopt.encoder': MeshoptEncoder });
+const document = await io.readBinary(out);
+await document.transform(weld(), meshopt({ encoder: MeshoptEncoder, level: 'medium', quantizePosition: 16, quantizeNormal: 10 }));
+const compressed = await io.writeBinary(document);
+writeFileSync(new URL('eiffel.glb', dir), compressed);
 console.log(
-  `wrote public/models/eiffel.glb: ${(out.byteLength / 1e6).toFixed(2)} MB — ${meshCount} PBR meshes, ${totalVerts.toLocaleString()} vertices, ${totalTris.toLocaleString()} triangles`,
+  `wrote public/models/eiffel.glb: ${(compressed.byteLength / 1e6).toFixed(2)} MB (${(out.byteLength / 1e6).toFixed(2)} MB before compression) — ${meshCount} PBR meshes, ${totalVerts.toLocaleString()} generated vertices, ${totalTris.toLocaleString()} triangles`,
 );

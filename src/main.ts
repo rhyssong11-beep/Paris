@@ -28,7 +28,10 @@ async function main() {
     view.resize();
     fit();
   });
-  $('togglePanel').addEventListener('click', () => panel.classList.toggle('closed'));
+  $('togglePanel').addEventListener('click', () => {
+    panel.classList.toggle('closed');
+    fit();
+  });
   $('loading').remove();
 
   // ---------------------------------------------------------------- speed
@@ -128,36 +131,64 @@ async function main() {
   };
   /** Landmark currently under the pointer, if any. */
   let hoveredPoi: string | null = null;
+  let viewerOpen = false;
   async function openLandmark(name: string) {
+    if (viewerOpen) return;
+    viewerOpen = true;
     tip.hidden = true;
     const wasSpeed = speed;
     setSpeed(0); // free the GPU/CPU for the viewer; resume on close
-    const { openViewer } = await import('./viewer');
-    const hr = (((sim.time % DAY) + DAY) % DAY) / 3600;
-    await openViewer({ name, night: hr < 6.5 || hr > 20.5, ...VIEWABLE[name] });
-    const resume = new MutationObserver(() => {
-      if (!document.getElementById('viewer')) {
-        resume.disconnect();
-        if (speed === 0) setSpeed(wasSpeed);
-      }
-    });
-    resume.observe(document.body, { childList: true });
+    const resume = () => {
+      viewerOpen = false;
+      if (speed === 0) setSpeed(wasSpeed);
+      view.invalidate();
+    };
+    try {
+      const { openViewer } = await import('./viewer');
+      const hr = (((sim.time % DAY) + DAY) % DAY) / 3600;
+      await openViewer({ name, night: hr < 6.5 || hr > 20.5, ...VIEWABLE[name], onClose: resume });
+    } catch (err) {
+      resume();
+      console.error('3D 뷰어를 열지 못했습니다', err);
+      tip.textContent = '3D 보기를 열지 못했습니다. 다시 시도해 주세요.';
+      tip.hidden = false;
+    }
+  }
+  function landmarkAt(sx: number, sy: number, viewableOnly = false) {
+    let best = 16;
+    let picked: CityData['pois'][number] | undefined;
+    for (const p of data.pois) {
+      if (viewableOnly && !VIEWABLE[p.name]) continue;
+      const [tx, ty] = view.toScreen(p.x, p.y);
+      const m = landmarkModel(p.name);
+      const s = m ? landmarkScale(m, view.cam.k) * view.cam.k : 1;
+      const r = m ? Math.max(14, m.radius * s * 0.7) : 12;
+      const topY = m ? ty - m.height * s * Z_SCALE : ty;
+      const cy = Math.min(ty, Math.max(topY, sy));
+      const d = Math.hypot(tx - sx, cy - sy);
+      if (d < r && d < best) { best = d; picked = p; }
+    }
+    return picked;
   }
   function hover(sx: number, sy: number) {
-    let html = '';
-    hoveredPoi = null;
-    let best = 14;
-    for (const tr of sim.metro.trains) {
-      const [tx, ty] = view.toScreen(tr.x, tr.y);
-      const d = Math.hypot(tx - sx, ty - sy);
-      if (d < best) {
-        best = d;
-        const stops = tr.route.stops;
-        html = `${chip(tr.route.line)} <b>${sim.metro.stations[stops[stops.length - 1]].name}</b> 방면<br>승객 ${tr.riders.length} / ${sim.metro.capacity}명`;
+    // The visible tower must stay clickable when nearby station markers overlap on small screens.
+    const clickable = landmarkAt(sx, sy, true);
+    let html = clickable ? `<b>${clickable.name}</b><br>클릭해서 3D로 보기` : '';
+    hoveredPoi = clickable?.name ?? null;
+    if (!html) {
+      let best = 14;
+      for (const tr of sim.metro.trains) {
+        const [tx, ty] = view.toScreen(tr.x, tr.y);
+        const d = Math.hypot(tx - sx, ty - sy);
+        if (d < best) {
+          best = d;
+          const stops = tr.route.stops;
+          html = `${chip(tr.route.line)} <b>${sim.metro.stations[stops[stops.length - 1]].name}</b> 방면<br>승객 ${tr.riders.length} / ${sim.metro.capacity}명`;
+        }
       }
     }
     if (!html) {
-      best = 12;
+      let best = 12;
       sim.metro.stations.forEach((s, i) => {
         const [tx, ty] = view.toScreen(s.x, s.y);
         const d = Math.hypot(tx - sx, ty - sy);
@@ -168,20 +199,10 @@ async function main() {
       });
     }
     if (!html) {
-      best = 16;
-      for (const p of data.pois) {
-        const [tx, ty] = view.toScreen(p.x, p.y);
-        const m = landmarkModel(p.name);
-        const s = m ? landmarkScale(m, view.cam.k) * view.cam.k : 1;
-        const r = m ? Math.max(14, m.radius * s * 0.7) : 12;
-        const topY = m ? ty - m.height * s * Z_SCALE : ty;
-        const cy = Math.min(ty, Math.max(topY, sy));
-        const d = Math.hypot(tx - sx, cy - sy);
-        if (d < r && d < best) {
-          best = d;
-          hoveredPoi = p.name;
-          html = `<b>${p.name}</b>${VIEWABLE[p.name] ? '<br>클릭해서 3D로 보기' : ''}`;
-        }
+      const p = landmarkAt(sx, sy);
+      if (p) {
+        hoveredPoi = p.name;
+        html = `<b>${p.name}</b>${VIEWABLE[p.name] ? '<br>클릭해서 3D로 보기' : ''}`;
       }
     }
     tip.hidden = !html;
@@ -216,9 +237,10 @@ async function main() {
   const spark = $<HTMLCanvasElement>('spark').getContext('2d')!;
   const busy = $('busy');
   busy.addEventListener('click', (e) => {
-    const li = (e.target as HTMLElement).closest('li');
+    const li = (e.target as HTMLElement).closest<HTMLElement>('li[data-station]');
     if (!li) return;
     const s = sim.metro.stations[+li.dataset.station!];
+    if (!s) return;
     view.cam.x = s.x;
     view.cam.y = s.y;
     view.cam.k = Math.max(view.cam.k, 0.3);
@@ -290,8 +312,8 @@ async function main() {
       sim.step(dt);
       debt -= dt;
     }
-    view.draw();
-    if (now - lastPanel > 200) {
+    if (!viewerOpen && !document.hidden) view.draw();
+    if (!viewerOpen && now - lastPanel > 200) {
       lastPanel = now;
       updatePanel();
     }

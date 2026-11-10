@@ -309,12 +309,17 @@ export class Simulation {
       a.segPos = 0;
       a.leg = null;
     } else {
-      a.state = State.Wait;
       a.leg = step.ride;
       a.station = step.ride.from;
       const s = this.data.metro.stations[a.station];
       a.x = s.x;
       a.y = s.y;
+      // A line may have closed while this passenger walked here or rode an earlier leg.
+      if (this.metro.lines[step.ride.line].closed || !this.metro.headway(this.time)) {
+        this.replan(a, a.station);
+        return;
+      }
+      a.state = State.Wait;
       this.metro.waiting[a.station].push(a);
     }
   }

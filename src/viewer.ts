@@ -17,6 +17,8 @@ import { GTAOPass } from 'three/examples/jsm/postprocessing/GTAOPass.js';
 import { MeshSurfaceSampler } from 'three/examples/jsm/math/MeshSurfaceSampler.js';
 import type { ViewerEntry } from './viewer-registry';
 import { findSplat } from './viewer-splat';
+import { disposeObject } from './viewer-resources';
+import { QUALITY, ViewerQuality } from './viewer-quality';
 
 const SPARKLES = 2600;
 const GOLD = new THREE.Color('#ffb347');
@@ -24,18 +26,19 @@ const GOLD = new THREE.Color('#ffb347');
 export interface ViewerOptions extends ViewerEntry {
   name: string;
   night: boolean;
+  onClose?: () => void;
 }
 
 let closeCurrent: (() => void) | null = null;
 
 export async function openViewer(opts: ViewerOptions) {
   closeCurrent?.();
-  const base = import.meta.env.BASE_URL;
 
   // ------------------------------------------------------------------ DOM
   const root = document.createElement('div');
   root.id = 'viewer';
   root.setAttribute('role', 'dialog');
+  root.setAttribute('aria-modal', 'true');
   root.setAttribute('aria-label', `${opts.name} 3D 보기`);
   root.innerHTML = `
     <canvas></canvas>
@@ -44,7 +47,9 @@ export async function openViewer(opts: ViewerOptions) {
     <div class="v-bar">
       <button data-act="day">☀ 낮</button>
       <button data-act="night">☾ 밤</button>
+      <button data-act="twinkle" aria-pressed="false">반짝임 보기</button>
       <button data-act="spin" aria-pressed="true">자동 회전</button>
+      <label class="v-quality">화질 <select aria-label="3D 화질"><option value="auto">자동</option><option value="high">높음</option><option value="medium">균형</option><option value="low">절약</option></select></label>
     </div>
     <button class="v-close" aria-label="닫기">✕</button>
     <div class="v-hint">드래그: 회전 · 휠/핀치: 확대 · 오른쪽 드래그: 이동</div>
@@ -53,46 +58,106 @@ export async function openViewer(opts: ViewerOptions) {
   root.querySelector('h2')!.textContent = opts.name;
   root.querySelector('p')!.textContent = opts.subtitle;
   document.body.append(root);
+  const previousFocus = document.activeElement as HTMLElement | null;
+  const controller = new AbortController();
+  const cleanup: (() => void)[] = [];
+  let closed = false;
+  const own = (dispose: () => void) => {
+    if (closed) dispose();
+    else cleanup.push(dispose);
+  };
+  const release = () => {
+    for (const dispose of cleanup.splice(0).reverse()) {
+      try { dispose(); } catch (err) { console.warn('viewer cleanup', err); }
+    }
+  };
+  const close = () => {
+    if (closed) return;
+    closed = true;
+    controller.abort();
+    release();
+    if (closeCurrent === close) closeCurrent = null;
+    const debug = window as Window & { viewer3d?: { close: () => void } };
+    if (debug.viewer3d?.close === close) delete debug.viewer3d;
+    root.remove();
+    previousFocus?.focus();
+    opts.onClose?.();
+  };
+  closeCurrent = close;
+  const onKey = (e: KeyboardEvent) => {
+    if (e.key === 'Escape') { e.preventDefault(); close(); }
+    if (e.key === 'Tab') {
+      const items = [...root.querySelectorAll<HTMLElement>('button:not(:disabled), select:not(:disabled)')]
+        .filter((item) => item.getClientRects().length > 0);
+      const first = items[0];
+      const last = items.at(-1);
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last?.focus(); }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first?.focus(); }
+    }
+    e.stopPropagation();
+  };
+  window.addEventListener('keydown', onKey, true);
+  own(() => window.removeEventListener('keydown', onKey, true));
+  root.querySelector<HTMLButtonElement>('.v-close')!.addEventListener('click', close);
+  root.querySelector<HTMLButtonElement>('.v-close')!.focus();
+  root.querySelectorAll<HTMLButtonElement | HTMLSelectElement>('.v-bar button, .v-bar select').forEach((b) => b.disabled = true);
+  try {
+    await buildViewer(opts, root, controller.signal, own, close);
+    if (!closed) root.querySelectorAll<HTMLButtonElement | HTMLSelectElement>('.v-bar button, .v-bar select').forEach((b) => b.disabled = false);
+  } catch (err) {
+    if (closed) return;
+    release();
+    // Keep an operable close button even on devices without WebGL.
+    window.addEventListener('keydown', onKey, true);
+    own(() => window.removeEventListener('keydown', onKey, true));
+    const message = root.querySelector('.v-loading') ?? root.appendChild(Object.assign(document.createElement('div'), { className: 'v-loading' }));
+    message.textContent = '3D 보기를 불러오지 못했습니다. 닫고 다시 시도해 주세요.';
+    console.error('viewer initialization', err);
+  }
+}
+
+async function buildViewer(opts: ViewerOptions, root: HTMLElement, signal: AbortSignal, own: (dispose: () => void) => void, close: () => void) {
+  const base = import.meta.env.BASE_URL;
   let canvas = root.querySelector('canvas')!;
   const note = root.querySelector<HTMLElement>('.v-note')!;
 
   // ------------------------------------------------------------------ photoreal splat capture, if one is present
-  const splatUrl = opts.splat ? await findSplat(`${base}${opts.splat.path}`) : null;
+  const splatUrl = opts.splat ? await findSplat(`${base}${opts.splat.path}`, signal) : null;
+  signal.throwIfAborted();
   if (splatUrl) {
+    let disposeSplat: (() => void) | undefined;
     try {
       const { openSplatViewer } = await import('./viewer-splat-run');
-      const sv = await openSplatViewer(canvas, splatUrl, opts.height, opts.splat!);
+      signal.throwIfAborted();
+      const sv = await openSplatViewer(canvas, splatUrl, opts.height, opts.splat!, signal);
+      disposeSplat = () => sv.dispose();
+      own(() => sv.dispose());
+      signal.throwIfAborted();
       root.classList.add('splat');
       note.textContent = opts.credit ?? '';
-      root.querySelector('.v-loading')!.remove();
-      const resize = () => sv.resize(root.clientWidth, root.clientHeight);
+      const quality = new ViewerQuality(root.querySelector('select')!, () => resize());
+      sv.observeFrames((dt) => quality.sample(dt));
+      const resize = () => {
+        quality.resize();
+        sv.resize(root.clientWidth, root.clientHeight, QUALITY[quality.level].pixelRatio);
+      };
       resize();
       window.addEventListener('resize', resize);
-      const onKey = (e: KeyboardEvent) => {
-        if (e.key === 'Escape') close();
-        e.stopPropagation();
-      };
-      const close = () => {
-        if (closeCurrent !== close) return;
-        closeCurrent = null;
-        window.removeEventListener('resize', resize);
-        window.removeEventListener('keydown', onKey, true);
-        sv.dispose();
-        root.remove();
-      };
-      closeCurrent = close;
-      window.addEventListener('keydown', onKey, true);
-      root.querySelector('.v-close')!.addEventListener('click', close);
+      own(() => window.removeEventListener('resize', resize));
       const spin = root.querySelector<HTMLElement>('[data-act=spin]')!;
       spin.addEventListener('click', () => {
         sv.controls.autoRotate = !sv.controls.autoRotate;
         spin.setAttribute('aria-pressed', String(sv.controls.autoRotate));
       });
+      root.querySelector('.v-loading')!.remove();
       Object.assign(window, { viewer3d: { scene: sv.scene, camera: sv.camera, controls: sv.controls, mode: 'splat', splats: sv.splats, usingFallback: false, close } });
       return;
     } catch (err) {
+      disposeSplat?.();
+      signal.throwIfAborted();
       // Unreadable capture: fall back to the mesh model on a fresh canvas (this one's GL context is spent).
       console.warn('splat capture could not be shown, falling back to the 3D model', err);
+      root.classList.remove('splat');
       const fresh = document.createElement('canvas');
       canvas.replaceWith(fresh);
       canvas = fresh;
@@ -101,14 +166,22 @@ export async function openViewer(opts: ViewerOptions) {
 
   // ------------------------------------------------------------------ scene
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  own(() => { renderer.dispose(); renderer.forceContextLoss(); });
+  const quality = new ViewerQuality(root.querySelector('select')!, () => resize());
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, QUALITY[quality.level].pixelRatio));
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.shadowMap.enabled = true;
-  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.shadowMap.type = THREE.PCFShadowMap;
 
   const scene = new THREE.Scene();
+  own(() => disposeObject(scene));
   const pmrem = new THREE.PMREMGenerator(renderer);
-  const envMap = pmrem.fromScene(new RoomEnvironment(), 0.04).texture; // neutral studio light, used at night
+  own(() => pmrem.dispose());
+  const room = new RoomEnvironment();
+  const nightTarget = pmrem.fromScene(room, 0.04);
+  room.dispose();
+  own(() => nightTarget.dispose());
+  const envMap = nightTarget.texture;
   // Daytime reflections come from the same sky and ground the viewer shows, so the iron picks up
   // warm light from the horizon and cool light from above instead of a white studio.
   const DAY_SKY = ['#2c69bd', '#86b7e6', '#f1e2c9'];
@@ -116,19 +189,24 @@ export async function openViewer(opts: ViewerOptions) {
     const env = new THREE.Scene();
     const dome = new THREE.Mesh(
       new THREE.SphereGeometry(50, 32, 16),
-      new THREE.MeshBasicMaterial({ map: gradientTexture([...DAY_SKY, '#8a8577', '#6f6a5e']), side: THREE.BackSide }),
+      new THREE.MeshBasicMaterial({
+        map: gradientTexture([DAY_SKY[0], DAY_SKY[0], DAY_SKY[1], DAY_SKY[2], '#8a8577', '#6f6a5e'], [0, 0.34, 0.47, 0.5, 0.6, 1]),
+        side: THREE.BackSide,
+      }),
     );
     env.add(dome);
-    const tex = pmrem.fromScene(env, 0.02).texture;
-    dome.geometry.dispose();
-    return tex;
+    const target = pmrem.fromScene(env, 0.02);
+    disposeObject(env);
+    own(() => target.dispose());
+    return target.texture;
   })();
   scene.environment = envMap;
 
   const H = opts.height;
   const camera = new THREE.PerspectiveCamera(38, 1, 1, H * 40);
-  camera.position.set(H * 1.25, H * 0.5, H * 1.25);
+  camera.position.set(H * 1.38, H * 0.66, H * 1.38);
   const controls = new OrbitControls(camera, canvas);
+  own(() => controls.dispose());
   controls.target.set(0, H * 0.42, 0);
   controls.enableDamping = true;
   controls.dampingFactor = 0.06;
@@ -172,8 +250,8 @@ export async function openViewer(opts: ViewerOptions) {
   // Stars (night only).
   const starGeo = new THREE.BufferGeometry();
   {
-    const p = new Float32Array(1500 * 3);
-    for (let i = 0; i < 1500; i++) {
+    const p = new Float32Array(320 * 3);
+    for (let i = 0; i < 320; i++) {
       const a = Math.random() * Math.PI * 2;
       const e = Math.asin(0.08 + Math.random() * 0.92);
       const r = H * 14;
@@ -181,21 +259,26 @@ export async function openViewer(opts: ViewerOptions) {
     }
     starGeo.setAttribute('position', new THREE.BufferAttribute(p, 3));
   }
-  const stars = new THREE.Points(starGeo, new THREE.PointsMaterial({ color: 0xffffff, size: 1.6, sizeAttenuation: false, fog: false, transparent: true, opacity: 0.8 }));
+  const stars = new THREE.Points(starGeo, new THREE.PointsMaterial({ color: 0xc6d4ea, size: 1, sizeAttenuation: false, fog: false, transparent: true, opacity: 0.28 }));
   scene.add(stars);
 
   // Post-processing: bloom makes the night lighting glow.
   // Multisampled so the thin ironwork stays crisp through the post-processing chain.
   const composer = new EffectComposer(renderer, new THREE.WebGLRenderTarget(1, 1, { samples: 4, type: THREE.HalfFloatType }));
+  own(() => {
+    for (const pass of composer.passes) pass.dispose();
+    composer.dispose();
+  });
   composer.addPass(new RenderPass(scene, camera));
   // Ambient occlusion: darkens the places light struggles to reach (between girders, under the
   // platforms, where trees and kerbs meet the ground), which is what gives the model depth.
   const ao = new GTAOPass(scene, camera, 1, 1);
-  ao.blendIntensity = 0.95;
-  ao.updateGtaoMaterial({ radius: 6, distanceExponent: 1.3, thickness: 2.5, scale: 1.25, samples: 12, screenSpaceRadius: false });
+  ao.setSceneClipBox(new THREE.Box3(new THREE.Vector3(-H * 0.7, -1, -H * 0.8), new THREE.Vector3(H * 0.7, H * 1.05, H * 0.8)));
+  ao.blendIntensity = 0.65;
+  ao.updateGtaoMaterial({ radius: 3, distanceExponent: 1.3, thickness: 2.5, scale: 1.25, samples: 12, screenSpaceRadius: false });
   ao.updatePdMaterial({ lumaPhi: 10, depthPhi: 2, normalPhi: 3, radius: 5, rings: 2, samples: 8 });
   composer.addPass(ao);
-  const bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.36, 0.45, 0.9);
+  const bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.2, 0.3, 1.05);
   composer.addPass(bloom);
   composer.addPass(new OutputPass());
 
@@ -203,11 +286,13 @@ export async function openViewer(opts: ViewerOptions) {
   let usingFallback = false;
   let model: THREE.Object3D;
   try {
-    model = await loadGlb(`${base}${opts.modelUrl}`, `${base}draco/`, H);
+    model = await loadGlb(`${base}${opts.modelUrl}`, `${base}draco/`, H, signal);
   } catch {
+    signal.throwIfAborted();
     usingFallback = true;
     model = buildEiffel(H);
   }
+  if (signal.aborted) { disposeObject(model); signal.throwIfAborted(); }
   model.traverse((o) => {
     if ((o as THREE.Mesh).isMesh) {
       o.castShadow = true;
@@ -217,27 +302,28 @@ export async function openViewer(opts: ViewerOptions) {
   scene.add(model);
   plaza.visible = usingFallback;
   applyGroundTextures(model, renderer.capabilities.getMaxAnisotropy());
-  note.textContent = usingFallback ? '임시 모델 (코드로 생성) — public/models/에 GLB 파일을 넣으면 교체됩니다' : (opts.credit ?? '');
+  note.textContent = usingFallback ? '간략 모델 · 상세 모델을 불러오지 못했습니다.' : (opts.credit ?? '');
   root.querySelector('.v-loading')!.remove();
 
-  // Warm architectural uplights placed along the tower core for 3D depth at night.
+  // Light the surfaces from within, keeping the unlit sides of the ironwork dark.
   const nightLights = new THREE.Group();
-  for (const [ly, intensity, dist] of [
-    [H * 0.11, H * 7, H * 0.7],
-    [H * 0.28, H * 5.5, H * 0.6],
-    [H * 0.55, H * 4, H * 0.55],
-    [H * 0.82, H * 3, H * 0.45],
+  for (const [y, width, targetY, targetWidth, intensity] of [
+    [7, 43, 80, 24, 56000],
+    [119, 14, 250, 4, 85000],
   ]) {
-    const pt = new THREE.PointLight(0xffb84d, intensity, dist, 1.6);
-    pt.position.set(0, ly, 0);
-    nightLights.add(pt);
+    for (const [sx, sz] of [[1, 1], [1, -1], [-1, 1], [-1, -1]]) {
+      const light = new THREE.SpotLight(0xffbf70, intensity, H, 0.46, 0.65, 2);
+      light.position.set(sx * width, y, sz * width);
+      light.target.position.set(sx * targetWidth, targetY, sz * targetWidth);
+      nightLights.add(light, light.target);
+    }
   }
   scene.add(nightLights);
 
   // Remember each material's daytime look and classify its night lighting role.
-  type NightRole = 'tower' | 'stone' | 'glow' | 'ground';
+  type NightRole = 'tower' | 'stone' | 'window' | 'glow' | 'ground';
   const WARM_WINDOW = new THREE.Color('#ffe299');
-  const mats = new Map<THREE.MeshStandardMaterial, { emissive: THREE.Color; intensity: number; role: NightRole }>();
+  const mats = new Map<THREE.MeshStandardMaterial, { emissive: THREE.Color; intensity: number; opacity: number; role: NightRole }>();
   model.traverse((o) => {
     const m = (o as THREE.Mesh).material;
     for (const mat of Array.isArray(m) ? m : m ? [m] : []) {
@@ -245,10 +331,12 @@ export async function openViewer(opts: ViewerOptions) {
       if (!std.emissive || mats.has(std)) continue;
       const tag = `${o.name} ${std.name}`;
       let role: NightRole = 'tower';
-      if (/(Glass|Glow)/i.test(tag)) role = 'glow';
+      if (/GlassFloor/i.test(tag)) role = 'ground';
+      else if (/Glass/i.test(tag)) role = 'window';
+      else if (/Glow/i.test(tag)) role = 'glow';
       else if (/(Plaza|Park|Foliage|Trunk|Water|Lawn|Curb)/i.test(tag)) role = 'ground';
       else if (/Stone/i.test(tag)) role = 'stone';
-      mats.set(std, { emissive: std.emissive.clone(), intensity: std.emissiveIntensity, role });
+      mats.set(std, { emissive: std.emissive.clone(), intensity: std.emissiveIntensity, opacity: std.opacity, role });
     }
   });
 
@@ -258,12 +346,24 @@ export async function openViewer(opts: ViewerOptions) {
 
   // Rotating beacon at the summit.
   const beacon = new THREE.Group();
-  beacon.position.y = H * 0.985;
+  beacon.position.y = H * 0.915;
+  const beamMaterial = new THREE.ShaderMaterial({
+    uniforms: { color: { value: new THREE.Color(0xcfe4ff) } },
+    vertexShader: `varying vec2 vUv; varying vec3 vNormal; varying vec3 vView;
+      void main() { vUv = uv; vNormal = normalMatrix * normal;
+        vec4 mv = modelViewMatrix * vec4(position, 1.0); vView = -mv.xyz;
+        gl_Position = projectionMatrix * mv; }`,
+    fragmentShader: `uniform vec3 color; varying vec2 vUv; varying vec3 vNormal; varying vec3 vView;
+      void main() { float edge = pow(abs(dot(normalize(vNormal), normalize(vView))), 2.0);
+        float fade = smoothstep(0.0, 0.7, vUv.y) * vUv.y;
+        gl_FragColor = vec4(color, edge * fade * 0.018); }`,
+    transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide,
+  });
   for (const dir of [1, -1]) {
     const len = H * 3.4; // long enough that the far end is lost in the haze
     const cone = new THREE.Mesh(
       new THREE.ConeGeometry(H * 0.03, len, 24, 1, true),
-      new THREE.MeshBasicMaterial({ color: 0xcfe4ff, transparent: true, opacity: 0.028, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide, fog: false }),
+      beamMaterial,
     );
     cone.rotation.z = (dir * Math.PI) / 2; // apex at the tower, widening outwards
     cone.position.x = (dir * len) / 2;
@@ -273,35 +373,48 @@ export async function openViewer(opts: ViewerOptions) {
 
   // ------------------------------------------------------------------ day / night
   let night = opts.night;
+  let twinkleUntil = 0;
+  const twinkleButton = root.querySelector<HTMLButtonElement>('[data-act=twinkle]')!;
   const applyMode = () => {
-    const sky = night ? ['#02040b', '#0b1530', '#1d2444'] : DAY_SKY;
-    scene.background = gradientTexture(sky);
-    scene.fog = new THREE.Fog(night ? 0x141b36 : 0xe9dcc6, H * 3.5, H * 12);
+    const sky = night ? ['#050b18', '#101b30', '#333343'] : DAY_SKY;
+    if (scene.background instanceof THREE.Texture) scene.background.dispose();
+    const background = gradientTexture([sky[0], sky[0], sky[1], sky[2], sky[2]], [0, 0.34, 0.47, 0.5, 1]);
+    // Match fog to the sky at zero elevation, even when the camera tilts or changes aspect ratio.
+    background.mapping = THREE.EquirectangularReflectionMapping;
+    scene.background = background;
+    scene.fog = new THREE.Fog(sky[sky.length - 1], H * 2.3, H * 6.3);
     scene.environment = night ? envMap : dayEnv;
-    scene.environmentIntensity = night ? 0.14 : 0.6;
-    hemi.intensity = night ? 0.09 : 0.4;
+    scene.environmentIntensity = night ? 0.18 : 0.6;
+    hemi.intensity = night ? 0.12 : 0.4;
     hemi.color.set(night ? 0x5a6cb0 : 0xbcd6f5);
     hemi.groundColor.set(night ? 0x20202a : 0x6b6252);
-    sun.intensity = night ? 0.1 : 2.7;
+    sun.intensity = night ? 0.04 : 2.7;
     sun.color.set(night ? 0x9db4ff : 0xffe3bd);
     groundMat.color.set(night ? 0x1a2030 : 0x8a8577);
     city.setNight(night);
     (plaza.material as THREE.MeshStandardMaterial).color.set(night ? 0x3a3a44 : 0xb9b3a6);
-    renderer.toneMappingExposure = night ? 0.95 : 0.86;
-    bloom.enabled = night;
-    ao.enabled = !night; // the additive night effects (beacon, sparkles) would cast false occlusion
-    stars.visible = sparkle.points.visible = beacon.visible = nightLights.visible = night;
+    renderer.toneMappingExposure = night ? 1.05 : 0.9;
+    bloom.enabled = night && QUALITY[quality.level].bloom;
+    ao.enabled = !night && QUALITY[quality.level].aoScale > 0;
+    stars.visible = beacon.visible = nightLights.visible = night;
+    sparkle.points.visible = night && twinkleUntil > 0;
+    twinkleButton.hidden = !night;
+    if (!night) { twinkleUntil = 0; twinkleButton.setAttribute('aria-pressed', 'false'); }
     for (const [m, day] of mats) {
       if (night) {
         if (day.role === 'glow') {
           m.emissive.copy(WARM_WINDOW);
-          m.emissiveIntensity = 1.2;
+          m.emissiveIntensity = 1.0;
+        } else if (day.role === 'window') {
+          m.emissive.copy(WARM_WINDOW);
+          m.emissiveIntensity = 0.22;
+          m.opacity = 0.7;
         } else if (day.role === 'tower') {
           m.emissive.copy(GOLD);
-          m.emissiveIntensity = 0.26;
+          m.emissiveIntensity = 0.018;
         } else if (day.role === 'stone') {
           m.emissive.copy(GOLD);
-          m.emissiveIntensity = 0.12;
+          m.emissiveIntensity = 0.012;
         } else {
           m.emissive.setRGB(0, 0, 0);
           m.emissiveIntensity = 0;
@@ -309,6 +422,7 @@ export async function openViewer(opts: ViewerOptions) {
       } else {
         m.emissive.copy(day.emissive);
         m.emissiveIntensity = day.intensity;
+        m.opacity = day.opacity;
       }
     }
     root.querySelector('[data-act=day]')!.setAttribute('aria-pressed', String(!night));
@@ -318,10 +432,25 @@ export async function openViewer(opts: ViewerOptions) {
 
   // ------------------------------------------------------------------ loop & lifecycle
   const resize = () => {
+    quality.resize();
+    const profile = QUALITY[quality.level];
     const w = root.clientWidth;
     const h = root.clientHeight;
+    const pixelRatio = Math.min(window.devicePixelRatio || 1, profile.pixelRatio);
+    renderer.setPixelRatio(pixelRatio);
     renderer.setSize(w, h, false);
+    composer.setPixelRatio(pixelRatio);
+    for (const target of [composer.renderTarget1, composer.renderTarget2]) {
+      if (target.samples !== profile.samples) { target.dispose(); target.samples = profile.samples; }
+    }
     composer.setSize(w, h);
+    if (profile.aoScale) ao.setSize(Math.round(w * pixelRatio * profile.aoScale), Math.round(h * pixelRatio * profile.aoScale));
+    if (sun.shadow.mapSize.x !== profile.shadow) {
+      sun.shadow.map?.dispose();
+      sun.shadow.map = null;
+      sun.shadow.mapSize.setScalar(profile.shadow);
+    }
+    applyMode();
     camera.aspect = w / h;
     // Pull back on tall narrow screens so the whole landmark fits.
     camera.fov = w < h ? 52 : 38;
@@ -329,78 +458,63 @@ export async function openViewer(opts: ViewerOptions) {
   };
   resize();
   window.addEventListener('resize', resize);
+  own(() => window.removeEventListener('resize', resize));
 
   let raf = 0;
-  let closed = false;
-  const clock = new THREE.Clock();
+  const timer = new THREE.Timer();
+  timer.connect(document);
+  own(() => timer.dispose());
+  const fineMeshes: THREE.Object3D[] = [];
+  model.traverse((o) => { if (/FineIron/.test(o.name)) fineMeshes.push(o); });
+  own(() => cancelAnimationFrame(raf));
   const frame = () => {
-    if (closed) return;
-    const dt = clock.getDelta();
-    controls.update();
+    if (signal.aborted) return;
+    timer.update();
+    const dt = timer.getDelta();
+    const elapsed = timer.getElapsed();
+    controls.update(dt);
+    quality.sample(dt);
+    const showFine = quality.level !== 'low' && camera.position.distanceTo(controls.target) < H * 2.7;
+    for (const mesh of fineMeshes) mesh.visible = showFine;
     if (night) {
-      sparkle.update(clock.elapsedTime);
+      sparkle.points.visible = elapsed < twinkleUntil;
+      if (sparkle.points.visible) sparkle.update(elapsed);
+      else twinkleButton.setAttribute('aria-pressed', 'false');
       beacon.rotation.y += dt * 0.5;
     }
-    composer.render();
+    if (!document.hidden) composer.render();
     raf = requestAnimationFrame(frame);
   };
   frame();
 
-  const onKey = (e: KeyboardEvent) => {
-    if (e.key === 'Escape') close();
-    e.stopPropagation();
-  };
-  function close() {
-    if (closed) return;
-    closed = true;
-    closeCurrent = null;
-    cancelAnimationFrame(raf);
-    window.removeEventListener('resize', resize);
-    window.removeEventListener('keydown', onKey, true);
-    controls.dispose();
-    scene.traverse((o) => {
-      const mesh = o as THREE.Mesh;
-      mesh.geometry?.dispose();
-      const m = mesh.material;
-      for (const mat of Array.isArray(m) ? m : m ? [m] : []) {
-        for (const v of Object.values(mat)) if (v instanceof THREE.Texture) v.dispose();
-        mat.dispose();
-      }
-    });
-    envMap.dispose();
-    dayEnv.dispose();
-    pmrem.dispose();
-    composer.dispose();
-    renderer.dispose();
-    root.remove();
-  }
-  closeCurrent = close;
-  window.addEventListener('keydown', onKey, true);
-  root.querySelector('.v-close')!.addEventListener('click', close);
   root.querySelector('.v-bar')!.addEventListener('click', (e) => {
     const b = (e.target as HTMLElement).closest('button');
     if (!b) return;
     if (b.dataset.act === 'spin') {
       controls.autoRotate = !controls.autoRotate;
       b.setAttribute('aria-pressed', String(controls.autoRotate));
-    } else {
+    } else if (b.dataset.act === 'twinkle') {
+      const elapsed = timer.getElapsed();
+      twinkleUntil = elapsed < twinkleUntil ? 0 : elapsed + 30;
+      b.setAttribute('aria-pressed', String(twinkleUntil > 0));
+    } else if (b.dataset.act === 'day' || b.dataset.act === 'night') {
       night = b.dataset.act === 'night';
       applyMode();
     }
   });
   // Expose for debugging / automated checks.
-  Object.assign(window, { viewer3d: { scene, camera, controls, usingFallback, close } });
+  Object.assign(window, { viewer3d: { scene, camera, controls, usingFallback, quality, close } });
 }
 
 // ---------------------------------------------------------------------- helpers
 
-function gradientTexture(stops: string[]) {
+function gradientTexture(stops: string[], positions = stops.map((_, i) => i / (stops.length - 1))) {
   const c = document.createElement('canvas');
   c.width = 4;
   c.height = 256;
   const g = c.getContext('2d')!;
   const grad = g.createLinearGradient(0, 0, 0, 256);
-  stops.forEach((s, i) => grad.addColorStop(i / (stops.length - 1), s));
+  stops.forEach((s, i) => grad.addColorStop(positions[i], s));
   g.fillStyle = grad;
   g.fillRect(0, 0, 4, 256);
   const t = new THREE.CanvasTexture(c);
@@ -409,18 +523,21 @@ function gradientTexture(stops: string[]) {
 }
 
 /** Load a GLB, stand it on the ground at the origin and scale it to `height` metres. */
-async function loadGlb(url: string, dracoPath: string, height: number): Promise<THREE.Object3D> {
+async function loadGlb(url: string, dracoPath: string, height: number, signal: AbortSignal): Promise<THREE.Object3D> {
   // Check first so a missing file fails fast (dev servers answer unknown paths with index.html).
-  const head = await fetch(url, { method: 'HEAD' });
-  if (!head.ok || (head.headers.get('content-type') ?? '').includes('text/html')) throw new Error('no model file');
+  const response = await fetch(url, { signal: AbortSignal.any([signal, AbortSignal.timeout(20000)]) });
+  if (!response.ok || (response.headers.get('content-type') ?? '').includes('text/html')) throw new Error('no model file');
+  const bytes = await response.arrayBuffer();
   const draco = new DRACOLoader().setDecoderPath(dracoPath);
   const loader = new GLTFLoader().setDRACOLoader(draco).setMeshoptDecoder(MeshoptDecoder);
-  const gltf = await loader.loadAsync(url);
-  draco.dispose();
+  let gltf;
+  try { gltf = await loader.parseAsync(bytes, url.slice(0, url.lastIndexOf('/') + 1)); }
+  finally { draco.dispose(); }
   const obj = gltf.scene;
+  if (signal.aborted) { disposeObject(obj); signal.throwIfAborted(); }
   const box = new THREE.Box3().setFromObject(obj);
   const size = box.getSize(new THREE.Vector3());
-  if (!(size.y > 0)) throw new Error('empty model');
+  if (!(size.y > 0)) { disposeObject(obj); throw new Error('empty model'); }
   const wrap = new THREE.Group();
   const s = height / size.y;
   obj.scale.multiplyScalar(s);
@@ -486,6 +603,7 @@ function makeSparkles(model: THREE.Object3D) {
     geo,
     new THREE.PointsMaterial({ size: 3.2, sizeAttenuation: false, vertexColors: true, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, fog: false }),
   );
+  points.name = 'Tower_Sparkles';
   const phase = Float32Array.from({ length: SPARKLES }, () => Math.random() * 100);
   const rate = Float32Array.from({ length: SPARKLES }, () => 5 + Math.random() * 9);
   return {
@@ -509,6 +627,7 @@ function makeSparkles(model: THREE.Object3D) {
  * textures themselves are drawn procedurally. They only modulate the materials' own colours.
  */
 function applyGroundTextures(model: THREE.Object3D, anisotropy: number) {
+  model.updateWorldMatrix(true, true);
   const rand = (() => {
     let a = 99;
     return () => ((a = (Math.imul(a, 1664525) + 1013904223) >>> 0) / 4294967296);
@@ -575,6 +694,16 @@ function applyGroundTextures(model: THREE.Object3D, anisotropy: number) {
   );
   const LAWN_TILE = 24;
 
+  // Painted metal has fine surface variation rather than a polished bronze finish.
+  const paintBump = canvasTexture(64, (g) => {
+    for (let y = 0; y < 64; y++) for (let x = 0; x < 64; x++) {
+      const v = 118 + rand() * 20;
+      g.fillStyle = `rgb(${v},${v},${v})`;
+      g.fillRect(x, y, 1, 1);
+    }
+  }, false);
+  let painted = false;
+
   const done = new Set<THREE.Material>();
   model.traverse((o) => {
     const mesh = o as THREE.Mesh;
@@ -582,24 +711,46 @@ function applyGroundTextures(model: THREE.Object3D, anisotropy: number) {
     if (!mesh.isMesh || Array.isArray(mat)) return;
     const isPaving = /Plaza_Stone/i.test(mat.name);
     const isLawn = /Park_Lawn/i.test(mat.name);
-    if (!isPaving && !isLawn) return;
-    const tile = isPaving ? PAVING_TILE : LAWN_TILE;
+    const isIron = /Tower_(Iron|DarkIron|FineIron)/i.test(mat.name);
+    if (!isPaving && !isLawn && !isIron) return;
+    const tile = isIron ? 0.65 : isPaving ? PAVING_TILE : LAWN_TILE;
     const pos = mesh.geometry.getAttribute('position');
+    const normal = mesh.geometry.getAttribute('normal');
+    const world = new THREE.Vector3();
+    const worldNormal = new THREE.Vector3();
+    const normalMatrix = new THREE.Matrix3().getNormalMatrix(mesh.matrixWorld);
     const uv = new Float32Array(pos.count * 2);
+    const color = isIron ? new Float32Array(pos.count * 3) : null;
     for (let i = 0; i < pos.count; i++) {
-      uv[i * 2] = pos.getX(i) / tile;
-      uv[i * 2 + 1] = pos.getZ(i) / tile;
+      world.fromBufferAttribute(pos, i).applyMatrix4(mesh.matrixWorld);
+      if (normal) worldNormal.fromBufferAttribute(normal, i).applyMatrix3(normalMatrix).normalize();
+      const side = isIron && normal && Math.abs(worldNormal.y) < 0.75;
+      uv[i * 2] = (side && Math.abs(worldNormal.x) > 0.7 ? world.z : world.x) / tile;
+      uv[i * 2 + 1] = (side ? world.y : world.z) / tile;
+      if (color) {
+        const shade = 0.86 + 0.14 * Math.min(1, Math.max(0, world.y / 280));
+        color.set([shade, shade, shade], i * 3);
+      }
     }
     mesh.geometry.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+    if (color) mesh.geometry.setAttribute('color', new THREE.BufferAttribute(color, 3));
     if (done.has(mat)) return;
     done.add(mat);
-    mat.map = isPaving ? paving : lawn;
+    if (isIron) {
+      mat.bumpMap = paintBump;
+      mat.bumpScale = 0.022;
+      mat.vertexColors = true;
+      painted = true;
+    } else mat.map = isPaving ? paving : lawn;
     if (isPaving) {
       mat.bumpMap = pavingBump;
       mat.bumpScale = 0.6;
     }
     mat.needsUpdate = true;
   });
+  if (!painted) paintBump.dispose();
+  if (![...done].some((m) => /Plaza_Stone/i.test(m.name))) { paving.dispose(); pavingBump.dispose(); }
+  if (![...done].some((m) => /Park_Lawn/i.test(m.name))) lawn.dispose();
 }
 
 /**
@@ -613,75 +764,108 @@ function buildCity(H: number) {
     let a = 20260711;
     return () => ((a = (Math.imul(a, 1664525) + 1013904223) >>> 0) / 4294967296);
   })();
-  const CELL = 64;
-  const R_IN = H * 0.8;
-  const R_OUT = H * 8;
-  const RIVER: [number, number] = [H * 0.95, H * 1.38]; // z range
-  const PARK_HALF = 115; // x half-width, on the -z side
-
-  const walls: THREE.Matrix4[] = [];
-  const roofs: THREE.Matrix4[] = [];
+  const CELL = 86;
+  const R_OUT = H * 6;
+  const RIVER: [number, number] = [205, 350];
+  const PARK_HALF = 100;
+  const walls: THREE.Matrix4[] = [], roofs: THREE.Matrix4[] = [];
   const tints: THREE.Color[] = [];
   const q = new THREE.Quaternion();
-  for (let gx = -R_OUT; gx <= R_OUT; gx += CELL)
+  for (let gx = -R_OUT; gx <= R_OUT; gx += CELL) {
     for (let gz = -R_OUT; gz <= R_OUT; gz += CELL) {
-      const r = Math.hypot(gx, gz);
-      if (r < R_IN || r > R_OUT) continue;
-      if (gz > RIVER[0] - CELL * 0.6 && gz < RIVER[1] + CELL * 0.6) continue; // river and quays
-      if (Math.abs(gx) < PARK_HALF + CELL * 0.5 && gz < 0 && gz > -H * 3.4) continue; // Champ de Mars
-      if (rand() < 0.06) continue; // squares and gaps
-      const w = CELL - 13 - rand() * 9;
-      const d = CELL - 13 - rand() * 9;
-      const h = 19 + rand() * 8;
-      const x = gx + (rand() - 0.5) * 5;
-      const z = gz + (rand() - 0.5) * 5;
-      const roofH = 5 + rand() * 2.5;
-      walls.push(new THREE.Matrix4().compose(new THREE.Vector3(x, h / 2, z), q, new THREE.Vector3(w, h, d)));
-      roofs.push(new THREE.Matrix4().compose(new THREE.Vector3(x, h + roofH / 2, z), q, new THREE.Vector3(w, roofH, d)));
-      tints.push(new THREE.Color().setHSL(0.1 + rand() * 0.02, 0.22 + rand() * 0.1, 0.74 + rand() * 0.1));
+      if (Math.hypot(gx, gz) < 175 || Math.hypot(gx, gz) > R_OUT) continue;
+      if (gz > RIVER[0] - 48 && gz < RIVER[1] + 48) continue;
+      if (Math.abs(gx) < PARK_HALF + 28 && gz < 0 && gz > -800) continue;
+      // Two broad diagonal avenues break up the residential block pattern.
+      if (Math.abs(gx + gz * 0.46 - 165) < 28 || Math.abs(gx - gz * 0.3 + 220) < 24) continue;
+      if (rand() < 0.08) continue;
+      const height = 17 + rand() * 13;
+      const blockWidth = 56 + rand() * 12;
+      const blockDepth = 48 + rand() * 17;
+      // Three wings form a small courtyard instead of a single repeated solid box.
+      const pieces = [[0, -blockDepth * 0.32, blockWidth, blockDepth * 0.36],
+        [-blockWidth * 0.34, blockDepth * 0.1, blockWidth * 0.32, blockDepth * 0.52],
+        [blockWidth * 0.34, blockDepth * 0.1, blockWidth * 0.32, blockDepth * 0.52]];
+      for (const [dx, dz, w, d] of pieces) {
+        const h = height + (rand() - 0.5) * 2;
+        const roofH = 3.2 + rand() * 2;
+        walls.push(new THREE.Matrix4().compose(new THREE.Vector3(gx + dx, h / 2, gz + dz), q, new THREE.Vector3(w, h, d)));
+        roofs.push(new THREE.Matrix4().compose(new THREE.Vector3(gx + dx, h + roofH / 2, gz + dz), q, new THREE.Vector3(w + 0.5, roofH, d + 0.5)));
+        tints.push(new THREE.Color().setHSL(0.09 + rand() * 0.025, 0.12 + rand() * 0.12, 0.75 + rand() * 0.16));
+      }
     }
+  }
+  const facade = document.createElement('canvas');
+  const lit = document.createElement('canvas');
+  facade.width = lit.width = 128; facade.height = lit.height = 128;
+  const fg = facade.getContext('2d')!, lg = lit.getContext('2d')!;
+  fg.fillStyle = '#e6e0d5'; fg.fillRect(0, 0, 128, 128);
+  lg.fillStyle = '#000'; lg.fillRect(0, 0, 128, 128);
+  for (let row = 0; row < 5; row++) {
+    const y = 7 + row * 24;
+    fg.fillStyle = '#b2a99a'; fg.fillRect(0, y + 18, 128, 2);
+    for (let col = 0; col < 8; col++) {
+      const x = 4 + col * 16;
+      fg.fillStyle = '#f8f3e8'; fg.fillRect(x - 1, y - 1, 10, 16);
+      fg.fillStyle = '#56616a'; fg.fillRect(x, y, 8, 14);
+      fg.fillStyle = '#a4a9a5'; fg.fillRect(x + 3, y, 1, 14); fg.fillRect(x, y + 7, 8, 1);
+      if (rand() < 0.28) { lg.fillStyle = '#ffd09a'; lg.fillRect(x, y, 8, 14); }
+    }
+  }
+  const facadeMap = new THREE.CanvasTexture(facade), lightMap = new THREE.CanvasTexture(lit);
+  facadeMap.colorSpace = lightMap.colorSpace = THREE.SRGBColorSpace;
   const box = new THREE.BoxGeometry(1, 1, 1);
-  const wallMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.9, metalness: 0 });
-  const roofMat = new THREE.MeshStandardMaterial({ color: 0x6d7884, roughness: 0.6, metalness: 0.2 });
+  const wallMat = new THREE.MeshStandardMaterial({ color: 0xf0e9dc, map: facadeMap, emissiveMap: lightMap, roughness: 0.92 });
+  const roofMat = new THREE.MeshStandardMaterial({ color: 0x697985, roughness: 0.72, metalness: 0.12 });
   const wallMesh = new THREE.InstancedMesh(box, wallMat, walls.length);
-  // Mansard roof: a four-sided frustum, one unit wide and tall, that slopes in towards a flat top.
   const mansard = new THREE.CylinderGeometry(0.5, Math.SQRT1_2, 1, 4, 1).rotateY(Math.PI / 4);
   const roofMesh = new THREE.InstancedMesh(mansard, roofMat, roofs.length);
-  walls.forEach((m, i) => {
-    wallMesh.setMatrixAt(i, m);
-    wallMesh.setColorAt(i, tints[i]);
-    roofMesh.setMatrixAt(i, roofs[i]);
-  });
+  walls.forEach((m, i) => { wallMesh.setMatrixAt(i, m); wallMesh.setColorAt(i, tints[i]); roofMesh.setMatrixAt(i, roofs[i]); });
   group.add(wallMesh, roofMesh);
 
   const flat = (w: number, d: number, x: number, z: number, y: number, mat: THREE.Material) => {
-    const m = new THREE.Mesh(new THREE.PlaneGeometry(w, d), mat);
-    m.rotation.x = -Math.PI / 2;
-    m.position.set(x, y, z);
-    m.receiveShadow = true;
-    group.add(m);
-    return m;
+    const mesh = new THREE.Mesh(new THREE.PlaneGeometry(w, d), mat);
+    mesh.rotation.x = -Math.PI / 2;
+    mesh.position.set(x, y, z); mesh.receiveShadow = true; group.add(mesh); return mesh;
   };
-  const waterMat = new THREE.MeshStandardMaterial({ color: 0x4d6b78, roughness: 0.18, metalness: 0.35 });
-  flat(R_OUT * 2.2, RIVER[1] - RIVER[0], 0, (RIVER[0] + RIVER[1]) / 2, 0.15, waterMat);
-  const lawnMat = new THREE.MeshStandardMaterial({ color: 0x5c7a45, roughness: 1, metalness: 0 });
-  flat(PARK_HALF * 2 - 30, H * 2.7, 0, -H * 2.0, 0.12, lawnMat);
-  const stoneMat = new THREE.MeshStandardMaterial({ color: 0xcfc6b4, roughness: 0.9, metalness: 0 });
-  const bridge = new THREE.Mesh(new THREE.BoxGeometry(36, 5, RIVER[1] - RIVER[0] + 30), stoneMat);
-  bridge.position.set(0, 2.5, (RIVER[0] + RIVER[1]) / 2);
-  group.add(bridge);
-
+  // Depth offsets keep thin ground overlays stable at city-scale viewing distances.
+  const waterMat = new THREE.MeshStandardMaterial({ color: 0x557a81, roughness: 0.32, metalness: 0.1, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -2 });
+  flat(R_OUT * 2.2, RIVER[1] - RIVER[0], 0, (RIVER[0] + RIVER[1]) / 2, 0.02, waterMat);
+  const lawnMat = new THREE.MeshStandardMaterial({ color: 0x718153, roughness: 1, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 });
+  const pathMat = new THREE.MeshStandardMaterial({ color: 0xb0a28a, roughness: 1, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -2 });
+  const stoneMat = new THREE.MeshStandardMaterial({ color: 0xa39d8f, roughness: 0.9 });
+  // Long Champ de Mars lawns, paths and tree avenues; the detailed local gardens live in the GLB.
+  for (const sign of [-1, 1]) {
+    flat(70, 570, sign * 52, -455, 0.015, lawnMat);
+    flat(8, 600, sign * 94, -455, 0.03, pathMat);
+    flat(R_OUT * 2, 9, 0, RIVER[sign === -1 ? 0 : 1] + sign * 10, 0.06, pathMat);
+  }
+  flat(18, 600, 0, -455, 0.03, pathMat);
+  for (const z of [-210, -340, -475, -620, -745]) flat(200, 5, 0, z, 0.04, pathMat);
+  const bridge = new THREE.Mesh(new THREE.BoxGeometry(37, 4, RIVER[1] - RIVER[0] + 28), stoneMat);
+  bridge.position.set(0, 2, (RIVER[0] + RIVER[1]) / 2); group.add(bridge);
+  const crownGeometry = new THREE.IcosahedronGeometry(1, 1);
+  const treePositions: [number, number][] = [];
+  for (let z = -175; z >= -745; z -= 18) for (const sign of [-1, 1]) treePositions.push([sign * 110, z]);
+  const crowns = new THREE.InstancedMesh(crownGeometry, new THREE.MeshStandardMaterial({ color: 0x425c35, roughness: 1 }), treePositions.length);
+  const trunks = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.5, 0.7, 8, 5), new THREE.MeshStandardMaterial({ color: 0x605044, roughness: 1 }), treePositions.length);
+  treePositions.forEach(([x, z], i) => {
+    const r = 3.5 + rand() * 1.5;
+    crowns.setMatrixAt(i, new THREE.Matrix4().compose(new THREE.Vector3(x, 11, z), q, new THREE.Vector3(r, r * 1.2, r)));
+    trunks.setMatrixAt(i, new THREE.Matrix4().makeTranslation(x, 4, z));
+  });
+  group.add(crowns, trunks);
   return {
     group,
     setNight(night: boolean) {
-      // At night the stone goes dark and a faint warm glow stands in for lit windows and street lamps.
-      wallMat.color.set(night ? 0x2a2f3d : 0xffffff);
-      wallMat.emissive.set(night ? 0xffb35c : 0x000000);
-      wallMat.emissiveIntensity = night ? 0.03 : 0;
-      roofMat.color.set(night ? 0x1a1f2a : 0x6d7884);
-      waterMat.color.set(night ? 0x0d1522 : 0x4d6b78);
-      lawnMat.color.set(night ? 0x141c16 : 0x5c7a45);
-      stoneMat.color.set(night ? 0x3a3a44 : 0xcfc6b4);
+      wallMat.color.set(night ? 0x32394a : 0xf0e9dc);
+      wallMat.emissive.set(night ? 0xffe0b4 : 0x000000);
+      wallMat.emissiveIntensity = night ? 0.3 : 0;
+      roofMat.color.set(night ? 0x182030 : 0x697985);
+      waterMat.color.set(night ? 0x101e30 : 0x557a81);
+      lawnMat.color.set(night ? 0x17251f : 0x718153);
+      pathMat.color.set(night ? 0x33343d : 0xb0a28a);
+      stoneMat.color.set(night ? 0x373a44 : 0xa39d8f);
     },
   };
 }
@@ -693,7 +877,7 @@ function buildCity(H: number) {
 function buildEiffel(height: number): THREE.Object3D {
   const k = height / 330;
   const group = new THREE.Group();
-  const iron = new THREE.MeshStandardMaterial({ color: 0x7a5c44, roughness: 0.55, metalness: 0.65 });
+  const iron = new THREE.MeshStandardMaterial({ name: 'Tower_Iron', color: 0x7a5c44, roughness: 0.72, metalness: 0.15 });
   const beams: THREE.Matrix4[] = [];
   const up = new THREE.Vector3(0, 1, 0);
   const q = new THREE.Quaternion();
@@ -769,19 +953,27 @@ function buildEiffel(height: number): THREE.Object3D {
     m.position.y = (y + h / 2) * k;
     group.add(m);
   };
-  const deck = new THREE.MeshStandardMaterial({ color: 0x5f4836, roughness: 0.7, metalness: 0.5 });
-  solid(outer(57) * 2 + 8, 5, 55, deck);
-  solid(outer(57) * 2 + 4, 2.2, 60.5);
-  solid(outer(115) * 2 + 6, 4.5, 113, deck);
-  solid(outer(115) * 2 + 3, 2, 117.5);
-  solid(outer(276) * 2 + 5, 4, 274, deck);
+  const deck = new THREE.MeshStandardMaterial({ color: 0x5f4836, roughness: 0.72, metalness: 0.15 });
+  const ring = (size: number, opening: number, y: number, thickness: number) => {
+    const strip = (size - opening) / 2;
+    for (const sign of [-1, 1]) {
+      for (const [w, d, x, z] of [[size, strip, 0, sign * (opening + strip) / 2], [strip, opening, sign * (opening + strip) / 2, 0]]) {
+        const m = new THREE.Mesh(new THREE.BoxGeometry(w * k, thickness * k, d * k), deck);
+        m.position.set(x * k, y * k, z * k);
+        group.add(m);
+      }
+    }
+  };
+  ring(76, 32, 57.63, 2.4);
+  ring(44, 9, 115.73, 2.1);
+  ring(18, 3, 276.13, 1.4);
   solid(8, 9, 278);
   solid(4.5, 5, 287);
   const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.35 * k, 1.1 * k, 38 * k, 10), iron);
   mast.position.y = (292 + 19) * k;
   group.add(mast);
   // Leg footings.
-  const stone = new THREE.MeshStandardMaterial({ color: 0xa79f90, roughness: 0.95, metalness: 0 });
+  const stone = new THREE.MeshStandardMaterial({ name: 'Tower_Stone', color: 0xa79f90, roughness: 0.95, metalness: 0 });
   for (const [sx, sz] of [[1, 1], [1, -1], [-1, -1], [-1, 1]]) {
     const f = new THREE.Mesh(new THREE.BoxGeometry(30 * k, 3 * k, 30 * k), stone);
     f.position.set(sx * (outer(0) - legHalf(0)) * k, 1.5 * k, sz * (outer(0) - legHalf(0)) * k);
