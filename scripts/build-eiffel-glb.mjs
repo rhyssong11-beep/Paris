@@ -103,12 +103,12 @@ class MeshBucket {
     }
     for (let i = 0; i < sides; i++) {
       const j = (i + 1) % sides;
-      this.addQuad(ring0[i], ring1[i], ring1[j], ring0[j]);
+      this.addQuad(ring0[i], ring0[j], ring1[j], ring1[i]);
     }
     if (cap) {
       for (let i = 1; i < sides - 1; i++) {
-        this.addTri(ring1[0], ring1[i + 1], ring1[i], dir);
-        this.addTri(ring0[0], ring0[i], ring0[i + 1], [-dir[0], -dir[1], -dir[2]]);
+        this.addTri(ring1[0], ring1[i], ring1[i + 1], dir);
+        this.addTri(ring0[0], ring0[i + 1], ring0[i], [-dir[0], -dir[1], -dir[2]]);
       }
     }
   }
@@ -118,11 +118,12 @@ class MeshBucket {
     const c = Math.cos(rotY);
     const s = Math.sin(rotY);
     const y1 = y0 + wy;
+    // CCW when viewed from +Y looking down: (-x,+z) -> (+x,+z) -> (+x,-z) -> (-x,-z)
     const pts = [
-      [-wx / 2, -wz / 2],
-      [wx / 2, -wz / 2],
-      [wx / 2, wz / 2],
       [-wx / 2, wz / 2],
+      [wx / 2, wz / 2],
+      [wx / 2, -wz / 2],
+      [-wx / 2, -wz / 2],
     ].map(([lx, lz]) => [cx + lx * c - lz * s, cz + lx * s + lz * c]);
     const b = pts.map(([x, z]) => [x, y0, z]);
     const t = pts.map(([x, z]) => [x, y1, z]);
@@ -136,10 +137,11 @@ class MeshBucket {
 
   /** Tapered frustum (square/rectangular or n-gon) along Y-up. */
   addFrustum(cx0, y0, cz0, rx0, rz0, cx1, y1, cz1, rx1, rz1, segs = 16, rotY = 0, capTop = true, capBottom = false) {
+    // CCW in (x, z) when viewed from +Y: x = +cos(a), z = -sin(a)
     const ring = (cx, y, cz, rx, rz) =>
       Array.from({ length: segs }, (_, i) => {
         const a = rotY + (i / segs) * Math.PI * 2;
-        return [cx + Math.cos(a) * rx, y, cz + Math.sin(a) * rz];
+        return [cx + Math.cos(a) * rx, y, cz - Math.sin(a) * rz];
       });
     const r0 = ring(cx0, y0, cz0, rx0, rz0);
     const r1 = ring(cx1, y1, cz1, rx1, rz1);
