@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>살아있는 파리 — Paris vivant</title>
+  </head>
+  <body>
+    <canvas id="map"></canvas>
+    <canvas id="live"></canvas>
+
+    <header id="top">
+      <div class="clock">
+        <span id="day">1일차</span>
+        <span id="time">05:30</span>
+      </div>
+      <div class="speeds" id="speeds" role="group" aria-label="시뮬레이션 속도"></div>
+    </header>
+
+    <aside id="panel">
+      <h1>살아있는 파리</h1>
+      <section>
+        <h2>지금 사람들은</h2>
+        <div class="bar" id="stateBar"></div>
+        <ul class="legend" id="stateLegend"></ul>
+      </section>
+      <section>
+        <h2>이동 중인 인구 (24시간)</h2>
+        <canvas id="spark" width="520" height="120"></canvas>
+      </section>
+      <section>
+        <h2>이동 수단</h2>
+        <dl class="kv">
+          <dt>메트로</dt><dd id="modeMetro">–</dd>
+          <dt>도보</dt><dd id="modeWalk">–</dd>
+          <dt>운행 중 열차</dt><dd id="trains">–</dd>
+        </dl>
+      </section>
+      <section>
+        <h2>가장 붐비는 역</h2>
+        <ol id="busy"></ol>
+      </section>
+      <section>
+        <h2>메트로 노선 <small>눌러서 파업(운행 중단)</small></h2>
+        <div id="lines"></div>
+      </section>
+      <section>
+        <h2>설정</h2>
+        <label class="row"><input type="checkbox" id="rain" /> 비 오는 날 (걷기를 꺼림)</label>
+        <label class="row">인구 <input type="range" id="pop" min="1000" max="20000" step="1000" value="6000" /> <output id="popOut">6,000</output></label>
+      </section>
+      <footer id="credits"></footer>
+    </aside>
+    <button id="togglePanel" aria-label="패널 열기/닫기">☰</button>
+    <div id="tip" hidden></div>
+    <div id="loading">파리를 불러오는 중…</div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
