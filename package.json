@@ -9,7 +9,8 @@
     "preview": "vite preview",
     "test": "vitest run",
     "data:fetch": "node scripts/fetch-data.mjs",
-    "data:build": "node scripts/build-data.mjs"
+    "data:build": "node scripts/build-data.mjs",
+    "model:eiffel": "node scripts/build-eiffel-glb.mjs"
   },
   "devDependencies": {
     "@types/node": "^26.6.6",

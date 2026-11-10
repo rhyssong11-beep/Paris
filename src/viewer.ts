@@ -143,20 +143,43 @@ export async function openViewer(opts: ViewerOptions) {
     }
   });
   scene.add(model);
+  plaza.visible = usingFallback;
   note.textContent = usingFallback ? '임시 모델 (코드로 생성) — public/models/에 GLB 파일을 넣으면 교체됩니다' : (opts.credit ?? '');
   root.querySelector('.v-loading')!.remove();
 
-  // Remember each material's daytime look so night mode can be undone.
-  const mats = new Map<THREE.MeshStandardMaterial, { emissive: THREE.Color; intensity: number }>();
+  // Warm architectural uplights placed along the tower core for 3D depth at night.
+  const nightLights = new THREE.Group();
+  for (const [ly, intensity, dist] of [
+    [H * 0.11, H * 18, H * 0.7],
+    [H * 0.28, H * 14, H * 0.6],
+    [H * 0.55, H * 10, H * 0.55],
+    [H * 0.82, H * 8, H * 0.45],
+  ]) {
+    const pt = new THREE.PointLight(0xffb84d, intensity, dist, 1.6);
+    pt.position.set(0, ly, 0);
+    nightLights.add(pt);
+  }
+  scene.add(nightLights);
+
+  // Remember each material's daytime look and classify its night lighting role.
+  type NightRole = 'tower' | 'stone' | 'glow' | 'ground';
+  const WARM_WINDOW = new THREE.Color('#ffe299');
+  const mats = new Map<THREE.MeshStandardMaterial, { emissive: THREE.Color; intensity: number; role: NightRole }>();
   model.traverse((o) => {
     const m = (o as THREE.Mesh).material;
     for (const mat of Array.isArray(m) ? m : m ? [m] : []) {
       const std = mat as THREE.MeshStandardMaterial;
-      if (std.emissive && !mats.has(std)) mats.set(std, { emissive: std.emissive.clone(), intensity: std.emissiveIntensity });
+      if (!std.emissive || mats.has(std)) continue;
+      const tag = `${o.name} ${std.name}`;
+      let role: NightRole = 'tower';
+      if (/(Glass|Glow)/i.test(tag)) role = 'glow';
+      else if (/(Plaza|Park|Foliage|Trunk|Water|Lawn|Curb)/i.test(tag)) role = 'ground';
+      else if (/Stone/i.test(tag)) role = 'stone';
+      mats.set(std, { emissive: std.emissive.clone(), intensity: std.emissiveIntensity, role });
     }
   });
 
-  // Sparkle lights scattered over the structure (the tower's hourly twinkle).
+  // Sparkle lights scattered over the iron tower structure only (the tower's hourly twinkle).
   const sparkle = makeSparkles(model);
   scene.add(sparkle.points);
 
@@ -181,20 +204,31 @@ export async function openViewer(opts: ViewerOptions) {
     const sky = night ? ['#02040b', '#0b1530', '#1d2444'] : ['#3f86d9', '#9cc8f2', '#e9eef2'];
     scene.background = gradientTexture(sky);
     scene.fog = new THREE.Fog(night ? 0x141b36 : 0xdfe8ee, H * 4, H * 13);
-    scene.environmentIntensity = night ? 0.12 : 0.9;
-    hemi.intensity = night ? 0.14 : 1.1;
+    scene.environmentIntensity = night ? 0.14 : 0.9;
+    hemi.intensity = night ? 0.18 : 1.1;
     hemi.color.set(night ? 0x5a6cb0 : 0xcfe6ff);
-    sun.intensity = night ? 0.25 : 3.2;
+    sun.intensity = night ? 0.28 : 3.2;
     sun.color.set(night ? 0x9db4ff : 0xfff1dc);
     groundMat.color.set(night ? 0x1a2030 : 0x6f7f5f);
     (plaza.material as THREE.MeshStandardMaterial).color.set(night ? 0x3a3a44 : 0xb9b3a6);
-    renderer.toneMappingExposure = night ? 1.15 : 1;
+    renderer.toneMappingExposure = night ? 1.12 : 1;
     bloom.enabled = night;
-    stars.visible = sparkle.points.visible = beacon.visible = night;
+    stars.visible = sparkle.points.visible = beacon.visible = nightLights.visible = night;
     for (const [m, day] of mats) {
       if (night) {
-        m.emissive.copy(GOLD);
-        m.emissiveIntensity = 0.85;
+        if (day.role === 'glow') {
+          m.emissive.copy(WARM_WINDOW);
+          m.emissiveIntensity = 1.65;
+        } else if (day.role === 'tower') {
+          m.emissive.copy(GOLD);
+          m.emissiveIntensity = 0.34;
+        } else if (day.role === 'stone') {
+          m.emissive.copy(GOLD);
+          m.emissiveIntensity = 0.12;
+        } else {
+          m.emissive.setRGB(0, 0, 0);
+          m.emissiveIntensity = 0;
+        }
       } else {
         m.emissive.copy(day.emissive);
         m.emissiveIntensity = day.intensity;
@@ -319,12 +353,20 @@ async function loadGlb(url: string, dracoPath: string, height: number): Promise<
 }
 
 function makeSparkles(model: THREE.Object3D) {
-  const meshes: THREE.Mesh[] = [];
+  const allMeshes: THREE.Mesh[] = [];
+  const towerMeshes: THREE.Mesh[] = [];
   model.updateWorldMatrix(true, true);
   model.traverse((o) => {
     const m = o as THREE.Mesh;
-    if (m.isMesh && m.geometry.getAttribute('position')?.count > 2 && !(m as THREE.InstancedMesh).isInstancedMesh) meshes.push(m);
+    if (m.isMesh && m.geometry.getAttribute('position')?.count > 2 && !(m as THREE.InstancedMesh).isInstancedMesh) {
+      allMeshes.push(m);
+      const tag = `${m.name} ${(m.material as THREE.Material)?.name ?? ''}`;
+      if (!/(Plaza|Park|Foliage|Trunk|Water|Lawn|Curb|Stone|Glass|Glow)/i.test(tag)) {
+        towerMeshes.push(m);
+      }
+    }
   });
+  const meshes = towerMeshes.length ? towerMeshes : allMeshes;
   const pos = new Float32Array(SPARKLES * 3);
   const col = new Float32Array(SPARKLES * 3);
   const v = new THREE.Vector3();

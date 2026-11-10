@@ -110,4 +110,17 @@ describe('3D landmarks', () => {
       expect(m!.radius).toBeGreaterThan(15);
     }
   });
+
+  it('ships a valid high-detail glTF 2.0 binary for the Eiffel Tower viewer', () => {
+    const glb = readFileSync(new URL('../public/models/eiffel.glb', import.meta.url));
+    const dv = new DataView(glb.buffer, glb.byteOffset, glb.byteLength);
+    expect(dv.getUint32(0, true)).toBe(0x46546c67); // 'glTF'
+    expect(dv.getUint32(4, true)).toBe(2); // version 2
+    expect(dv.getUint32(8, true)).toBe(glb.byteLength);
+    const jsonLen = dv.getUint32(12, true);
+    const json = JSON.parse(new TextDecoder().decode(glb.subarray(20, 20 + jsonLen)));
+    expect(json.meshes.length).toBeGreaterThanOrEqual(10);
+    const names = json.materials.map((m: { name: string }) => m.name);
+    expect(names).toEqual(expect.arrayContaining(['Tower_Iron', 'Tower_Glass', 'Plaza_Stone', 'Park_Foliage', 'Fountain_Water', 'Lamp_Glow']));
+  });
 });
