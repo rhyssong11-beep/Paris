@@ -1,5 +1,6 @@
 import type { CityData } from './types';
 import { type Simulation, State } from './sim';
+import { landmarkModel, landmarkScale, Z_SCALE, type Model } from './landmarks';
 
 export const COLORS = {
   resident: '#ffd166',
@@ -28,6 +29,8 @@ export class Renderer {
   private mapCtx: CanvasRenderingContext2D;
   private liveCtx: CanvasRenderingContext2D;
   private mapDirty = true;
+  /** 3D landmark models, ordered north to south so nearer ones overlap farther ones */
+  private landmarks: { x: number; y: number; model: Model }[];
   private paths: {
     land: Path2D;
     borders: Path2D;
@@ -79,6 +82,12 @@ export class Renderer {
       return p;
     });
     this.paths = { land, borders, water, green, minor, major, lines };
+    this.landmarks = data.pois
+      .flatMap((p) => {
+        const model = landmarkModel(p.name);
+        return model ? [{ x: p.x, y: p.y, model }] : [];
+      })
+      .sort((a, b) => b.y - a.y);
     this.resize();
   }
 
@@ -223,6 +232,12 @@ export class Renderer {
         const [sx, sy] = this.toScreen(p.x, p.y);
         if (sx < -80 || sy < -20 || sx > this.width + 80 || sy > this.height + 20) continue;
         ctx.fillStyle = '#ffb4a2';
+        const model = landmarkModel(p.name);
+        if (model) {
+          // The 3D model is drawn on the live layer; here only its label, just below its footprint.
+          if (cam.k > 0.1) halo(p.name, sx, sy + model.radius * landmarkScale(model, cam.k) * cam.k + 12);
+          continue;
+        }
         ctx.beginPath();
         ctx.moveTo(sx, sy - 4.5);
         ctx.lineTo(sx + 4.5, sy);
@@ -307,6 +322,33 @@ export class Renderer {
       ctx.fill();
       ctx.stroke();
       ctx.restore();
+    }
+
+    // Landmarks stand above everything else on the map.
+    ctx.lineJoin = 'round';
+    ctx.lineWidth = 0.6;
+    for (const lm of this.landmarks) {
+      const { model } = lm;
+      const s = landmarkScale(model, k) * k;
+      const bx = lm.x * k + ox;
+      const by = oy - lm.y * k;
+      const reach = model.radius * s;
+      if (bx < -reach || bx > W + reach || by < -reach || by - model.height * s * Z_SCALE > H + reach) continue;
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.28)';
+      ctx.beginPath();
+      ctx.ellipse(bx + reach * 0.1, by - reach * 0.08, reach * 0.95, reach * 0.7, 0, 0, Math.PI * 2);
+      ctx.fill();
+      const sz = s * Z_SCALE;
+      for (const f of model.faces) {
+        const p = f.pts;
+        ctx.beginPath();
+        ctx.moveTo(bx + p[0] * s, by - p[1] * s - p[2] * sz);
+        for (let i = 3; i < p.length; i += 3) ctx.lineTo(bx + p[i] * s, by - p[i + 1] * s - p[i + 2] * sz);
+        ctx.closePath();
+        ctx.fillStyle = ctx.strokeStyle = f.fill;
+        ctx.fill();
+        ctx.stroke();
+      }
     }
   }
 }
