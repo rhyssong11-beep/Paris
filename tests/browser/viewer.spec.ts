@@ -110,6 +110,40 @@ test('reduces automatic quality under sustained load and respects a manual choic
   await page.keyboard.press('Escape');
 });
 
+test('animates local traffic, pauses it, and adapts its density without displacing the tower', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  await openFromMap(page);
+  const quality = page.getByRole('combobox', { name: '3D 화질' });
+  await quality.selectOption('high');
+  const state = () => page.evaluate(() => {
+    const { scene, traffic, camera } = (window as any).viewer3d;
+    const tower = scene.getObjectByName('Tower_Iron');
+    tower.geometry.computeBoundingBox();
+    const centre = tower.geometry.boundingBox.getCenter(camera.position.clone()).applyMatrix4(tower.matrixWorld);
+    return { pedestrians: traffic.simulation.pedestrians.length, cars: traffic.simulation.cars.length,
+      time: traffic.simulation.time, travelled: traffic.simulation.cars[0].travelled, centre: [centre.x, centre.z] };
+  });
+  const before = await state();
+  expect(before.pedestrians).toBe(160); expect(before.cars).toBe(32);
+  expect(Math.hypot(...before.centre)).toBeLessThan(0.1);
+  await expect.poll(async () => (await state()).travelled).toBeGreaterThan(before.travelled);
+  await page.getByRole('button', { name: '사람·차량 이동', exact: true }).click();
+  const stopped = await state();
+  await page.getByRole('button', { name: '☀ 낮', exact: true }).click();
+  await page.getByRole('button', { name: '거리 보기', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).viewer3d.controls.target.z)).toBeCloseTo(163, 0);
+  expect((await state()).time).toBe(stopped.time);
+  await quality.selectOption('low');
+  expect((await state()).pedestrians).toBe(56); expect((await state()).cars).toBe(12);
+  await page.getByRole('button', { name: '사람·차량 이동', exact: true }).click();
+  await expect.poll(async () => (await state()).time).toBeGreaterThan(stopped.time);
+  await page.getByRole('button', { name: '☾ 밤', exact: true }).click();
+  expect(await page.evaluate(() => (window as any).viewer3d.scene.getObjectByName('Vehicle_LightPools').visible)).toBe(true);
+  await page.keyboard.press('Escape');
+  expect(errors).toEqual([]);
+});
+
 test('frames a translucent splat capture and restores the map after closing', async ({ page }) => {
   // The .splat format uses 32-byte records: centre, scale, RGBA, quaternion.
   const bytes = Buffer.alloc(32 * 24);

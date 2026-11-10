@@ -97,6 +97,7 @@ canvas#live.clickable { cursor: pointer; }
 #viewer .v-vignette { position: absolute; inset: 0; pointer-events: none; background: radial-gradient(ellipse at 50% 45%, transparent 55%, rgba(0, 0, 0, 0.38) 100%); }
 #viewer.splat .v-vignette { display: none; }
 #viewer.splat [data-act='twinkle'] { display: none; }
+#viewer.splat [data-act='street'], #viewer.splat [data-act='traffic'] { display: none; }
 .v-quality { display: flex; align-items: center; gap: 6px; padding: 0 5px; font-size: 12px; white-space: nowrap; }
 .v-quality select { font: inherit; color: var(--text); background: #1b2230; border: 1px solid var(--line); border-radius: 6px; padding: 6px; min-height: 34px; }
 #viewer button:focus-visible, #viewer select:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
