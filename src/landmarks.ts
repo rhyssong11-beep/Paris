@@ -274,7 +274,13 @@ class Builder {
       const a1 = ((b + 1) / bands) * (Math.PI / 2);
       const r0 = r * Math.cos(a0);
       const r1 = Math.max(0.05, r * Math.cos(a1));
-      this.loft(ngon(cx, cy, r0, n), z0 + h * Math.sin(a0), ngon(cx, cy, r1, n), z0 + h * Math.sin(a1), color, opts, b === bands - 1);
+      const za = z0 + h * Math.sin(a0);
+      const zb = z0 + h * Math.sin(a1);
+      if (h >= 0) {
+        this.loft(ngon(cx, cy, r0, n), za, ngon(cx, cy, r1, n), zb, color, opts, b === bands - 1);
+      } else {
+        this.loft(ngon(cx, cy, r1, n), zb, ngon(cx, cy, r0, n), za, color, opts, false);
+      }
     }
     return this;
   }
@@ -345,8 +351,8 @@ class Builder {
       const a = (i / segs) * Math.PI;
       const y0 = -hd * Math.cos(a);
       const z = z0 + h * Math.sin(a);
-      frontFace.push(toW(hw, y0, z));
-      backFace.unshift(toW(-hw, y0, z));
+      frontFace.unshift(toW(hw, y0, z));
+      backFace.push(toW(-hw, y0, z));
       if (i < segs) {
         const a1 = ((i + 1) / segs) * Math.PI;
         const y1 = -hd * Math.cos(a1);
@@ -396,7 +402,17 @@ class Builder {
     const s = Math.sin(rot);
     let height = 0;
     let radius = 0;
-    const faces: (Face & { depth: number })[] = [];
+    interface BuiltFace extends Face {
+      depth: number;
+      zMin: number;
+      zMax: number;
+      sxMin: number;
+      sxMax: number;
+      syMin: number;
+      syMax: number;
+      nz: number;
+    }
+    const raw: BuiltFace[] = [];
 
     for (const { pts, color, opts } of this.polys) {
       const p = pts.map(([x, y, z]) => [x * c - y * s, x * s + y * c, z] as Vec3);
@@ -404,6 +420,12 @@ class Builder {
       const n: Vec3 = [0, 0, 0];
       let depth = 0;
       let zAvg = 0;
+      let zMin = Infinity;
+      let zMax = -Infinity;
+      let sxMin = Infinity;
+      let sxMax = -Infinity;
+      let syMin = Infinity;
+      let syMax = -Infinity;
       p.forEach((a, i) => {
         const b = p[(i + 1) % p.length];
         n[0] += (a[1] - b[1]) * (a[2] + b[2]);
@@ -411,6 +433,14 @@ class Builder {
         n[2] += (a[0] - b[0]) * (a[1] + b[1]);
         depth += a[1] * VIEW[1] + a[2] * VIEW[2];
         zAvg += a[2];
+        if (a[2] < zMin) zMin = a[2];
+        if (a[2] > zMax) zMax = a[2];
+        const sx = a[0];
+        const sy = -a[1] - a[2] * Z_SCALE;
+        if (sx < sxMin) sxMin = sx;
+        if (sx > sxMax) sxMax = sx;
+        if (sy < syMin) syMin = sy;
+        if (sy > syMax) syMax = sy;
         height = Math.max(height, a[2]);
         radius = Math.max(radius, Math.hypot(a[0], a[1]));
       });
@@ -422,19 +452,69 @@ class Builder {
 
       zAvg /= p.length;
       const shaded = shadeColor(color, unit, zAvg, opts.mat ?? 'stone');
-      faces.push({
+      raw.push({
         pts: p.flat(),
         fill: shaded.day,
         nightFill: shaded.night,
         stroke: opts.stroke,
         alpha: opts.alpha,
         depth: depth / p.length + facing * 0.35 + (opts.bias ?? 0),
+        zMin,
+        zMax,
+        sxMin,
+        sxMax,
+        syMin,
+        syMax,
+        nz: unit[2],
       });
     }
 
-    faces.sort((a, b) => a.depth - b.depth);
+    // Topological Painter's Sort: if face A's 2D projection overlaps face B and A lies strictly
+    // below B in z (or A is a horizontal cap that B sits on), A must be drawn before B.
+    raw.sort((a, b) => a.depth - b.depth);
+    const m = raw.length;
+    const adj: number[][] = Array.from({ length: m }, () => []);
+    const inDeg = new Int32Array(m);
+    for (let i = 0; i < m; i++) {
+      const a = raw[i];
+      for (let j = i + 1; j < m; j++) {
+        const b = raw[j];
+        if (a.sxMax < b.sxMin + 0.1 || b.sxMax < a.sxMin + 0.1 || a.syMax < b.syMin + 0.1 || b.syMax < a.syMin + 0.1) continue;
+        const aBelowB =
+          (a.zMax <= b.zMin + 0.15 && b.zMax > a.zMax + 0.2) ||
+          (a.nz > 0.9 && b.zMin >= a.zMax - 0.15 && b.zMax > a.zMax + 0.2);
+        const bBelowA =
+          (b.zMax <= a.zMin + 0.15 && a.zMax > b.zMax + 0.2) ||
+          (b.nz > 0.9 && a.zMin >= b.zMax - 0.15 && a.zMax > b.zMax + 0.2);
+        if (aBelowB && !bBelowA) {
+          adj[i].push(j);
+          inDeg[j]++;
+        } else if (bBelowA && !aBelowB) {
+          adj[j].push(i);
+          inDeg[i]++;
+        }
+      }
+    }
+    const used = new Uint8Array(m);
+    const sorted: BuiltFace[] = [];
+    for (let step = 0; step < m; step++) {
+      let pick = -1;
+      for (let i = 0; i < m; i++) {
+        if (!used[i] && inDeg[i] === 0) {
+          pick = i;
+          break;
+        }
+      }
+      if (pick < 0) {
+        for (let i = 0; i < m; i++) if (!used[i]) { pick = i; break; }
+      }
+      used[pick] = 1;
+      sorted.push(raw[pick]);
+      for (const nxt of adj[pick]) inDeg[nxt]--;
+    }
+
     return {
-      faces: faces.map(({ pts, fill, nightFill, stroke, alpha }) => ({ pts, fill, nightFill, stroke, alpha })),
+      faces: sorted.map(({ pts, fill, nightFill, stroke, alpha }) => ({ pts, fill, nightFill, stroke, alpha })),
       height,
       radius,
     };
