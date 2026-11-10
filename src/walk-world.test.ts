@@ -11,7 +11,7 @@ function wall(grid: WalkGrid, x0: number, x1: number, z: number, y0: number, y1:
   grid.addTriangle(x0, y0, z, x1, y0, z, x1, y1, z);
   grid.addTriangle(x0, y0, z, x1, y1, z, x0, y1, z);
 }
-const walk = (w: Walker, input: Partial<{ forward: number; right: number; run: boolean }>, seconds: number) => {
+const walk = (w: Walker, input: Partial<{ forward: number; right: number; run: boolean; jump: boolean }>, seconds: number) => {
   for (let t = 0; t < seconds; t += 1 / 60) w.step({ forward: 0, right: 0, run: false, ...input }, 1 / 60);
 };
 
@@ -33,12 +33,12 @@ describe('walking', () => {
     expect(w.x).toBeLessThan(-2.5);
   });
 
-  it('walks at 4.5 m/s, runs twice as fast, and stops when keys are released', () => {
-    const w = new Walker(new WalkGrid(200));
+  it('walks at 9 m/s, runs at 18 m/s, and stops when keys are released', () => {
+    const w = new Walker(new WalkGrid(400));
     w.place(0, 0, 0);
     walk(w, { forward: 1 }, 10);
-    expect(-w.z).toBeGreaterThan(43);
-    expect(-w.z).toBeLessThan(45.5);
+    expect(-w.z).toBeGreaterThan(87);
+    expect(-w.z).toBeLessThan(90.5);
     const walked = -w.z;
     w.place(0, 0, 0);
     walk(w, { forward: 1, run: true }, 10);
@@ -46,10 +46,10 @@ describe('walking', () => {
     // Diagonal movement is not faster than straight.
     w.place(0, 0, 0);
     walk(w, { forward: 1, right: 1 }, 10);
-    expect(Math.hypot(w.x, w.z)).toBeLessThan(45.5);
+    expect(Math.hypot(w.x, w.z)).toBeLessThan(90.5);
     const before = [w.x, w.z];
     walk(w, {}, 1);
-    expect(Math.hypot(w.x - before[0], w.z - before[1])).toBeLessThan(0.6);
+    expect(Math.hypot(w.x - before[0], w.z - before[1])).toBeLessThan(1.2);
   });
 
   it('limits how far up and down you can look', () => {
@@ -123,8 +123,65 @@ describe('walking', () => {
     slab(grid, -3, -40, 3, -10, 1);
     const w = new Walker(grid);
     w.place(0, 3, 0);
-    walk(w, { forward: 1 }, 6); // long enough to climb the ramp, not to walk off the far end
+    walk(w, { forward: 1 }, 3); // long enough to climb the ramp, not to walk off the far end
     expect(w.z).toBeLessThan(-15);
     expect(w.y).toBeCloseTo(1, 1);
+  });
+
+  it('jumps about 1.2 m and lands where it started', () => {
+    const w = new Walker(new WalkGrid(100));
+    w.place(0, 0, 0);
+    let top = 0;
+    let airborne = 0;
+    w.step({ forward: 0, right: 0, run: false, jump: true }, 1 / 120);
+    expect(w.onGround).toBe(false);
+    while (!w.onGround) {
+      w.step({ forward: 0, right: 0, run: false }, 1 / 120);
+      top = Math.max(top, w.y);
+      airborne += 1 / 120;
+    }
+    expect(top).toBeGreaterThan(1.1);
+    expect(top).toBeLessThan(1.3);
+    expect(airborne).toBeGreaterThan(0.6);
+    expect(airborne).toBeLessThan(0.8);
+    expect(w.y).toBe(0);
+    // No jumping again in mid-air: a second press while rising changes nothing.
+    w.step({ forward: 0, right: 0, run: false, jump: true }, 1 / 120);
+    const rising = w.y;
+    w.step({ forward: 0, right: 0, run: false, jump: true }, 1 / 120);
+    expect(w.y - rising).toBeLessThan(7 / 120);
+  });
+
+  it('can jump onto a ledge that is too high to walk up', () => {
+    const grid = new WalkGrid(100);
+    slab(grid, -10, -40, 10, -10, 1.0);
+    wall(grid, -10, 10, -10, 0, 1.0);
+    const w = new Walker(grid);
+    w.place(0, 0, 0);
+    walk(w, { forward: 1 }, 3);
+    expect(w.y).toBe(0);
+    expect(w.z).toBeGreaterThan(-10); // walking alone is stopped by the ledge
+    walk(w, { forward: 1, jump: true }, 1.5);
+    expect(w.y).toBeGreaterThanOrEqual(1.0);
+    expect(w.z).toBeLessThan(-10.5);
+    walk(w, { forward: 0 }, 2);
+    expect(w.y).toBeCloseTo(1.0, 5);
+    expect(w.onGround).toBe(true);
+  });
+
+  it('falls off a high edge instead of teleporting down', () => {
+    const grid = new WalkGrid(100);
+    slab(grid, -5, -10, 5, 10, 3); // a 3 m high deck
+    const w = new Walker(grid);
+    w.place(0, 0, 0);
+    expect(w.y).toBe(3);
+    const heights: number[] = [];
+    for (let t = 0; t < 3; t += 1 / 60) {
+      w.step({ forward: 1, right: 0, run: false }, 1 / 60);
+      if (w.z < -10) heights.push(w.y);
+    }
+    expect(heights.some((h) => h > 0.5 && h < 2.5)).toBe(true); // seen part-way down
+    expect(w.y).toBe(0);
+    expect(w.onGround).toBe(true);
   });
 });

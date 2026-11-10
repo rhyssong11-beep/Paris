@@ -114,12 +114,15 @@ export class WalkMode {
     };
     on(window, 'keydown', (e: KeyboardEvent) => {
       // Physical key positions, so it works whatever the keyboard language is (한/영 included).
-      if (KEYS[e.code] || e.code === 'ShiftLeft' || e.code === 'ShiftRight') {
+      if (KEYS[e.code] || e.code === 'ShiftLeft' || e.code === 'ShiftRight' || e.code === 'Space') {
         this.keys.add(e.code);
         e.preventDefault();
       }
     }, { capture: true });
-    on(window, 'keyup', (e: KeyboardEvent) => this.keys.delete(e.code), { capture: true });
+    on(window, 'keyup', (e: KeyboardEvent) => {
+      this.keys.delete(e.code);
+      if (e.code === 'Space') e.preventDefault(); // or it would press whichever button has focus
+    }, { capture: true });
     on(window, 'blur', () => this.keys.clear());
     on(document, 'visibilitychange', () => this.keys.clear());
     // Mouse look: captured pointer when the browser allows it, otherwise hold-and-drag.
@@ -173,11 +176,12 @@ export class WalkMode {
           right += k[1];
         }
       }
-      w.step({ forward: Math.sign(forward), right: Math.sign(right), run: this.keys.has('ShiftLeft') || this.keys.has('ShiftRight') }, Math.min(dt, 0.1));
+      w.step({ forward: Math.sign(forward), right: Math.sign(right), run: this.keys.has('ShiftLeft') || this.keys.has('ShiftRight'), jump: this.keys.has('Space') }, Math.min(dt, 0.1));
     }
     // The eyes follow the ground smoothly, so kerbs feel like steps rather than jolts.
     const targetY = w.y + EYE_HEIGHT;
-    this.eyeY += (targetY - this.eyeY) * Math.min(1, dt * 12);
+    // In the air they move exactly with the body, or the jump would feel rubbery.
+    this.eyeY = w.onGround ? this.eyeY + (targetY - this.eyeY) * Math.min(1, dt * 14) : targetY;
     this.euler.set(w.pitch, w.yaw, 0);
     this.quat.setFromEuler(this.euler);
 

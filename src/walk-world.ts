@@ -175,10 +175,14 @@ export interface WalkInput {
   /** +1 right, -1 left */
   right: number;
   run: boolean;
+  /** held down: jump as soon as the feet are on the ground */
+  jump?: boolean;
 }
 
-const WALK_SPEED = 4.5; // m/s: three times a real stroll, so the large site is quick to cross
-const RUN_SPEED = WALK_SPEED * 2;
+const WALK_SPEED = 9; // m/s: far quicker than a real stroll, so the large site is quick to cross
+const RUN_SPEED = 18;
+const JUMP_SPEED = 7; // m/s upwards at take-off: about 1.2 m high, 0.7 s in the air
+const GRAVITY = 20; // m/s², stronger than real so jumps feel snappy at these speeds
 const MAX_PITCH = (85 * Math.PI) / 180;
 
 /** A person on foot: position of the feet, and where they are looking. */
@@ -193,6 +197,9 @@ export class Walker {
   pitch = 0;
   private vx = 0;
   private vz = 0;
+  private vy = 0;
+  /** false while jumping or falling */
+  onGround = true;
 
   constructor(
     private grid: WalkGrid,
@@ -205,7 +212,8 @@ export class Walker {
     this.z = z;
     this.yaw = yaw;
     this.pitch = pitch;
-    this.vx = this.vz = 0;
+    this.vx = this.vz = this.vy = 0;
+    this.onGround = true;
     this.y = this.grid.ground(x, z, MAX_Y);
   }
 
@@ -218,13 +226,15 @@ export class Walker {
   private standAt(x: number, z: number): number | null {
     if (!this.allowed(x, z)) return null;
     const g = this.grid.ground(x, z, this.y);
+    // In the air the body is wherever the feet are, so a jump can clear what a walk cannot.
+    const base = this.onGround ? g : Math.max(g, this.y);
     const r = BODY_RADIUS;
     if (
-      this.grid.blocked(x, z, g) ||
-      this.grid.blocked(x + r, z, g) ||
-      this.grid.blocked(x - r, z, g) ||
-      this.grid.blocked(x, z + r, g) ||
-      this.grid.blocked(x, z - r, g)
+      this.grid.blocked(x, z, base) ||
+      this.grid.blocked(x + r, z, base) ||
+      this.grid.blocked(x - r, z, base) ||
+      this.grid.blocked(x, z + r, base) ||
+      this.grid.blocked(x, z - r, base)
     )
       return null;
     return g;
@@ -247,8 +257,11 @@ export class Walker {
     const k = Math.min(1, dt * 12);
     this.vx += (wantX - this.vx) * k;
     this.vz += (wantZ - this.vz) * k;
-    if (Math.abs(this.vx) < 1e-3 && Math.abs(this.vz) < 1e-3) return;
+    if (Math.abs(this.vx) > 1e-3 || Math.abs(this.vz) > 1e-3) this.moveHorizontally(dt);
+    this.moveVertically(input.jump === true, dt);
+  }
 
+  private moveHorizontally(dt: number) {
     // Move in sub-steps no longer than a third of a cell so thin obstacles are never skipped.
     const dist = Math.hypot(this.vx, this.vz) * dt;
     const parts = Math.max(1, Math.ceil(dist / (this.grid.cell / 3)));
@@ -270,7 +283,33 @@ export class Walker {
         this.vx = this.vz = 0;
         return;
       }
+      if (this.onGround) {
+        // Kerbs and steps are simply followed; anything deeper is a drop to fall down.
+        if (g < this.y - STEP_UP) this.onGround = false;
+        else this.y = g;
+      } else if (g > this.y) {
+        // Caught the edge of something within a step of the feet: land on it.
+        this.y = g;
+        this.vy = 0;
+        this.onGround = true;
+      }
+    }
+  }
+
+  private moveVertically(jump: boolean, dt: number) {
+    if (this.onGround) {
+      if (!jump) return;
+      this.vy = JUMP_SPEED;
+      this.onGround = false;
+    }
+    this.vy -= GRAVITY * dt;
+    this.y += this.vy * dt;
+    if (this.vy > 0) return;
+    const g = this.grid.ground(this.x, this.z, this.y);
+    if (this.y <= g) {
       this.y = g;
+      this.vy = 0;
+      this.onGround = true;
     }
   }
 }

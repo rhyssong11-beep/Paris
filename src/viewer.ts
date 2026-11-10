@@ -502,8 +502,8 @@ async function buildViewer(opts: ViewerOptions, root: HTMLElement, signal: Abort
     onExit: () => leaveWalk(),
     onLock: (locked) => {
       root.querySelector('.v-hint')!.textContent = locked
-        ? 'W A S D: 이동 · 마우스: 시야 · Shift: 달리기 · Esc: 나가기'
-        : 'W A S D: 이동 · 화면을 클릭하면 마우스로 둘러볼 수 있습니다 · Shift: 달리기 · Esc: 나가기';
+        ? 'W A S D: 이동 · 마우스: 시야 · Shift: 달리기 · Space: 점프 · Esc: 나가기'
+        : 'W A S D: 이동 · 화면을 클릭하면 마우스로 둘러볼 수 있습니다 · Shift: 달리기 · Space: 점프 · Esc: 나가기';
     },
   });
   own(() => walk.stop());
