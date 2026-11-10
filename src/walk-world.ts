@@ -177,8 +177,8 @@ export interface WalkInput {
   run: boolean;
 }
 
-const WALK_SPEED = 1.5; // m/s
-const RUN_SPEED = 4.6;
+const WALK_SPEED = 4.5; // m/s: three times a real stroll, so the large site is quick to cross
+const RUN_SPEED = WALK_SPEED * 2;
 const MAX_PITCH = (85 * Math.PI) / 180;
 
 /** A person on foot: position of the feet, and where they are looking. */

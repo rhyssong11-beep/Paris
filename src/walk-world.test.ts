@@ -33,22 +33,23 @@ describe('walking', () => {
     expect(w.x).toBeLessThan(-2.5);
   });
 
-  it('walks at a human pace, runs faster, and stops when keys are released', () => {
+  it('walks at 4.5 m/s, runs twice as fast, and stops when keys are released', () => {
     const w = new Walker(new WalkGrid(200));
     w.place(0, 0, 0);
     walk(w, { forward: 1 }, 10);
-    expect(-w.z).toBeGreaterThan(13);
-    expect(-w.z).toBeLessThan(16);
+    expect(-w.z).toBeGreaterThan(43);
+    expect(-w.z).toBeLessThan(45.5);
+    const walked = -w.z;
     w.place(0, 0, 0);
     walk(w, { forward: 1, run: true }, 10);
-    expect(-w.z).toBeGreaterThan(40);
+    expect(-w.z / walked).toBeCloseTo(2, 1);
     // Diagonal movement is not faster than straight.
     w.place(0, 0, 0);
     walk(w, { forward: 1, right: 1 }, 10);
-    expect(Math.hypot(w.x, w.z)).toBeLessThan(16);
+    expect(Math.hypot(w.x, w.z)).toBeLessThan(45.5);
     const before = [w.x, w.z];
     walk(w, {}, 1);
-    expect(Math.hypot(w.x - before[0], w.z - before[1])).toBeLessThan(0.3);
+    expect(Math.hypot(w.x - before[0], w.z - before[1])).toBeLessThan(0.6);
   });
 
   it('limits how far up and down you can look', () => {
@@ -122,7 +123,7 @@ describe('walking', () => {
     slab(grid, -3, -40, 3, -10, 1);
     const w = new Walker(grid);
     w.place(0, 3, 0);
-    walk(w, { forward: 1 }, 15);
+    walk(w, { forward: 1 }, 6); // long enough to climb the ramp, not to walk off the far end
     expect(w.z).toBeLessThan(-15);
     expect(w.y).toBeCloseTo(1, 1);
   });
