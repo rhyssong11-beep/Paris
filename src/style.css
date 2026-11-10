@@ -74,3 +74,22 @@ button[aria-pressed='true'] { background: var(--accent); border-color: var(--acc
   #top { top: 8px; left: 8px; right: 60px; }
   #time { font-size: 22px; }
 }
+
+/* ------------------------------------------------------------------ 3D landmark viewer */
+#viewer { position: fixed; inset: 0; z-index: 10; background: #05070b; }
+#viewer canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; cursor: grab; }
+#viewer .v-title { position: absolute; top: 18px; left: 22px; pointer-events: none; text-shadow: 0 1px 8px rgba(0, 0, 0, 0.6); }
+#viewer .v-title h2 { margin: 0; font-size: 28px; font-weight: 650; letter-spacing: 0.3px; }
+#viewer .v-title p { margin: 4px 0 0; font-size: 13px; opacity: 0.85; }
+#viewer .v-close { position: absolute; top: 16px; right: 18px; width: 42px; height: 42px; border-radius: 21px; font-size: 16px; }
+#viewer .v-bar {
+  position: absolute; left: 50%; bottom: 44px; transform: translateX(-50%); display: flex; gap: 6px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 6px; backdrop-filter: blur(6px);
+}
+#viewer .v-hint, #viewer .v-note { position: absolute; left: 0; right: 0; text-align: center; font-size: 11.5px; pointer-events: none; text-shadow: 0 1px 4px rgba(0, 0, 0, 0.8); padding: 0 12px; }
+#viewer .v-hint { bottom: 16px; }
+#viewer .v-note { bottom: 100px; }
+#viewer .v-hint::first-line, #viewer .v-note:not(:empty) { color: #e6e9ef; }
+#viewer .v-note:not(:empty), #viewer .v-hint { width: fit-content; margin: 0 auto; background: rgba(8, 11, 17, 0.6); border-radius: 8px; padding: 3px 10px; }
+#viewer .v-loading { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); background: #05070b; }
+canvas#live.clickable { cursor: pointer; }

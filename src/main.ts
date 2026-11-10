@@ -4,6 +4,7 @@ import { Simulation, DAY } from './sim';
 import { Renderer, COLORS } from './render';
 import { landmarkModel, landmarkScale, Z_SCALE } from './landmarks';
 import { fmtClock } from './util';
+import { VIEWABLE } from './viewer-registry';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const SPEEDS = [0, 30, 120, 600, 1800];
@@ -106,7 +107,10 @@ async function main() {
   const release = (e: PointerEvent) => {
     pointers.delete(e.pointerId);
     if (!pointers.size) live.classList.remove('dragging');
-    if (moved < 6 && e.type === 'pointerup') hover(e.clientX, e.clientY);
+    if (moved < 6 && e.type === 'pointerup') {
+      hover(e.clientX, e.clientY);
+      if (hoveredPoi && VIEWABLE[hoveredPoi]) openLandmark(hoveredPoi);
+    }
   };
   live.addEventListener('pointerup', release);
   live.addEventListener('pointercancel', release);
@@ -122,8 +126,26 @@ async function main() {
     const l = sim.metro.lines[line];
     return `<span class="chip" style="background:${l.color};color:${luminance(l.color) > 0.5 ? '#111' : '#fff'}">${l.ref}</span>`;
   };
+  /** Landmark currently under the pointer, if any. */
+  let hoveredPoi: string | null = null;
+  async function openLandmark(name: string) {
+    tip.hidden = true;
+    const wasSpeed = speed;
+    setSpeed(0); // free the GPU/CPU for the viewer; resume on close
+    const { openViewer } = await import('./viewer');
+    const hr = (((sim.time % DAY) + DAY) % DAY) / 3600;
+    await openViewer({ name, night: hr < 6.5 || hr > 20.5, ...VIEWABLE[name] });
+    const resume = new MutationObserver(() => {
+      if (!document.getElementById('viewer')) {
+        resume.disconnect();
+        if (speed === 0) setSpeed(wasSpeed);
+      }
+    });
+    resume.observe(document.body, { childList: true });
+  }
   function hover(sx: number, sy: number) {
     let html = '';
+    hoveredPoi = null;
     let best = 14;
     for (const tr of sim.metro.trains) {
       const [tx, ty] = view.toScreen(tr.x, tr.y);
@@ -157,11 +179,13 @@ async function main() {
         const d = Math.hypot(tx - sx, cy - sy);
         if (d < r && d < best) {
           best = d;
-          html = `<b>${p.name}</b>`;
+          hoveredPoi = p.name;
+          html = `<b>${p.name}</b>${VIEWABLE[p.name] ? '<br>클릭해서 3D로 보기' : ''}`;
         }
       }
     }
     tip.hidden = !html;
+    live.classList.toggle('clickable', !!hoveredPoi && !!VIEWABLE[hoveredPoi]);
     if (html) {
       tip.innerHTML = html;
       tip.style.left = `${Math.min(sx + 14, window.innerWidth - 270)}px`;
