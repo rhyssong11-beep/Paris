@@ -93,3 +93,4 @@ button[aria-pressed='true'] { background: var(--accent); border-color: var(--acc
 #viewer .v-note:not(:empty), #viewer .v-hint { width: fit-content; margin: 0 auto; background: rgba(8, 11, 17, 0.6); border-radius: 8px; padding: 3px 10px; }
 #viewer .v-loading { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); background: #05070b; }
 canvas#live.clickable { cursor: pointer; }
+#viewer.splat [data-act='day'], #viewer.splat [data-act='night'] { display: none; }

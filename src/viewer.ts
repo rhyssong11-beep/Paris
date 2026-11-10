@@ -15,6 +15,7 @@ import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPa
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import { MeshSurfaceSampler } from 'three/examples/jsm/math/MeshSurfaceSampler.js';
 import type { ViewerEntry } from './viewer-registry';
+import { findSplat } from './viewer-splat';
 
 const SPARKLES = 2600;
 const GOLD = new THREE.Color('#ffb347');
@@ -50,8 +51,51 @@ export async function openViewer(opts: ViewerOptions) {
   root.querySelector('h2')!.textContent = opts.name;
   root.querySelector('p')!.textContent = opts.subtitle;
   document.body.append(root);
-  const canvas = root.querySelector('canvas')!;
+  let canvas = root.querySelector('canvas')!;
   const note = root.querySelector<HTMLElement>('.v-note')!;
+
+  // ------------------------------------------------------------------ photoreal splat capture, if one is present
+  const splatUrl = opts.splat ? await findSplat(`${base}${opts.splat.path}`) : null;
+  if (splatUrl) {
+    try {
+      const { openSplatViewer } = await import('./viewer-splat-run');
+      const sv = await openSplatViewer(canvas, splatUrl, opts.height, opts.splat!);
+      root.classList.add('splat');
+      note.textContent = opts.credit ?? '';
+      root.querySelector('.v-loading')!.remove();
+      const resize = () => sv.resize(root.clientWidth, root.clientHeight);
+      resize();
+      window.addEventListener('resize', resize);
+      const onKey = (e: KeyboardEvent) => {
+        if (e.key === 'Escape') close();
+        e.stopPropagation();
+      };
+      const close = () => {
+        if (closeCurrent !== close) return;
+        closeCurrent = null;
+        window.removeEventListener('resize', resize);
+        window.removeEventListener('keydown', onKey, true);
+        sv.dispose();
+        root.remove();
+      };
+      closeCurrent = close;
+      window.addEventListener('keydown', onKey, true);
+      root.querySelector('.v-close')!.addEventListener('click', close);
+      const spin = root.querySelector<HTMLElement>('[data-act=spin]')!;
+      spin.addEventListener('click', () => {
+        sv.controls.autoRotate = !sv.controls.autoRotate;
+        spin.setAttribute('aria-pressed', String(sv.controls.autoRotate));
+      });
+      Object.assign(window, { viewer3d: { scene: sv.scene, camera: sv.camera, controls: sv.controls, mode: 'splat', splats: sv.splats, usingFallback: false, close } });
+      return;
+    } catch (err) {
+      // Unreadable capture: fall back to the mesh model on a fresh canvas (this one's GL context is spent).
+      console.warn('splat capture could not be shown, falling back to the 3D model', err);
+      const fresh = document.createElement('canvas');
+      canvas.replaceWith(fresh);
+      canvas = fresh;
+    }
+  }
 
   // ------------------------------------------------------------------ scene
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
