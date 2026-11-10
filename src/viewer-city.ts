@@ -114,6 +114,8 @@ export function buildCity(H: number) {
   group.add(crowns, trunks);
   return {
     group,
+    /** The Seine (a band across z) and the half-width of the bridge that crosses it at x = 0. */
+    river: { z0: RIVER[0], z1: RIVER[1], bridgeHalfWidth: 18.5 },
     setNight(night: boolean) {
       wallMat.color.set(night ? 0x32394a : 0xf0e9dc);
       wallMat.emissive.set(night ? 0xffe0b4 : 0x000000);

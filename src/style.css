@@ -110,3 +110,9 @@ canvas#live.clickable { cursor: pointer; }
   #viewer .v-note { bottom: 140px; }
   #viewer .v-hint { bottom: 12px; font-size: 10px; max-width: calc(100% - 20px); }
 }
+#viewer .v-cross { position: absolute; left: 50%; top: 50%; width: 6px; height: 6px; margin: -3px 0 0 -3px; border-radius: 50%; background: rgba(255, 255, 255, 0.85); box-shadow: 0 0 0 1.5px rgba(0, 0, 0, 0.45); pointer-events: none; }
+#viewer.walking canvas { cursor: crosshair; }
+#viewer.walking .v-title, #viewer.walking .v-vignette { opacity: 0.55; }
+#viewer.splat [data-act='walk'] { display: none; }
+/* Walking needs a keyboard and a mouse. */
+@media (hover: none), (pointer: coarse) { #viewer [data-act='walk'] { display: none; } }

@@ -16,6 +16,7 @@ import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import { GTAOPass } from 'three/examples/jsm/postprocessing/GTAOPass.js';
 import { MeshSurfaceSampler } from 'three/examples/jsm/math/MeshSurfaceSampler.js';
 import type { ViewerEntry } from './viewer-registry';
+import { buildWalkGrid, WalkMode } from './viewer-walk';
 import { findSplat } from './viewer-splat';
 import { disposeObject } from './viewer-resources';
 import { QUALITY, ViewerQuality } from './viewer-quality';
@@ -52,10 +53,12 @@ export async function openViewer(opts: ViewerOptions) {
       <button data-act="twinkle" aria-pressed="false">반짝임 보기</button>
       <button data-act="spin" aria-pressed="true">자동 회전</button>
       <button data-act="street" aria-pressed="false">거리 보기</button>
+      <button data-act="walk" aria-pressed="false">걸어서 보기</button>
       <button data-act="traffic" aria-label="사람·차량 이동" aria-pressed="true">주변 이동</button>
       <label class="v-quality">화질 <select aria-label="3D 화질"><option value="auto">자동</option><option value="high">높음</option><option value="medium">균형</option><option value="low">절약</option></select></label>
     </div>
     <button class="v-close" aria-label="닫기">✕</button>
+    <div class="v-cross" hidden></div>
     <div class="v-hint">드래그: 회전 · 휠/핀치: 확대 · 오른쪽 드래그: 이동</div>
     <div class="v-note"></div>
     <div class="v-loading">모델을 불러오는 중…</div>`;
@@ -88,8 +91,10 @@ export async function openViewer(opts: ViewerOptions) {
     opts.onClose?.();
   };
   closeCurrent = close;
+  /** `leave` is set once the 3D scene exists: it leaves walk mode if it is on and says whether it was. */
+  const walkHook = { leave: (): boolean => false };
   const onKey = (e: KeyboardEvent) => {
-    if (e.key === 'Escape') { e.preventDefault(); close(); }
+    if (e.key === 'Escape') { e.preventDefault(); if (!walkHook.leave()) close(); }
     if (e.key === 'Tab') {
       const items = [...root.querySelectorAll<HTMLElement>('button:not(:disabled), select:not(:disabled)')]
         .filter((item) => item.getClientRects().length > 0);
@@ -106,7 +111,7 @@ export async function openViewer(opts: ViewerOptions) {
   root.querySelector<HTMLButtonElement>('.v-close')!.focus();
   root.querySelectorAll<HTMLButtonElement | HTMLSelectElement>('.v-bar button, .v-bar select').forEach((b) => b.disabled = true);
   try {
-    await buildViewer(opts, root, controller.signal, own, close);
+    await buildViewer(opts, root, controller.signal, own, close, walkHook);
     if (!closed) root.querySelectorAll<HTMLButtonElement | HTMLSelectElement>('.v-bar button, .v-bar select').forEach((b) => b.disabled = false);
   } catch (err) {
     if (closed) return;
@@ -120,7 +125,7 @@ export async function openViewer(opts: ViewerOptions) {
   }
 }
 
-async function buildViewer(opts: ViewerOptions, root: HTMLElement, signal: AbortSignal, own: (dispose: () => void) => void, close: () => void) {
+async function buildViewer(opts: ViewerOptions, root: HTMLElement, signal: AbortSignal, own: (dispose: () => void) => void, close: () => void, walkHook: { leave: () => boolean }) {
   const base = import.meta.env.BASE_URL;
   let canvas = root.querySelector('canvas')!;
   const note = root.querySelector<HTMLElement>('.v-note')!;
@@ -479,6 +484,62 @@ async function buildViewer(opts: ViewerOptions, root: HTMLElement, signal: Abort
   const overview = { position: camera.position.clone(), target: controls.target.clone(), spin: controls.autoRotate };
   let flight: { start: number; from: THREE.Vector3; to: THREE.Vector3; fromTarget: THREE.Vector3; toTarget: THREE.Vector3 } | undefined;
   own(() => cancelAnimationFrame(raf));
+
+  // ------------------------------------------------------------------ walking around on foot
+  const HINT_ORBIT = root.querySelector('.v-hint')!.textContent!;
+  const walkButton = root.querySelector<HTMLButtonElement>('[data-act=walk]')!;
+  const WALK_RADIUS = 540;
+  const walk = new WalkMode({
+    camera,
+    canvas,
+    grid: () => buildWalkGrid([model, city.group], WALK_RADIUS + 20),
+    allowed: (x, z) => {
+      if (Math.hypot(x, z) > WALK_RADIUS) return false; // the edge of the detailed scene
+      const { z0, z1, bridgeHalfWidth } = city.river;
+      return z < z0 || z > z1 || Math.abs(x) < bridgeHalfWidth - 1; // the Seine, except on the bridge
+    },
+    start: { x: 0, z: 128, lookAt: [0, H * 0.3, 0] },
+    onExit: () => leaveWalk(),
+    onLock: (locked) => {
+      root.querySelector('.v-hint')!.textContent = locked
+        ? 'W A S D: 이동 · 마우스: 시야 · Shift: 달리기 · Esc: 나가기'
+        : 'W A S D: 이동 · 화면을 클릭하면 마우스로 둘러볼 수 있습니다 · Shift: 달리기 · Esc: 나가기';
+    },
+  });
+  own(() => walk.stop());
+  const enterWalk = () => {
+    if (walk.active) return;
+    if (!streetView && !flight) {
+      overview.position.copy(camera.position); overview.target.copy(controls.target); overview.spin = controls.autoRotate;
+    }
+    streetView = false;
+    flight = undefined;
+    root.querySelector('[data-act=street]')!.setAttribute('aria-pressed', 'false');
+    controls.autoRotate = false;
+    controls.enabled = false;
+    root.querySelector('[data-act=spin]')!.setAttribute('aria-pressed', 'false');
+    walk.start();
+    walkButton.setAttribute('aria-pressed', 'true');
+    root.classList.add('walking');
+    root.querySelector<HTMLElement>('.v-cross')!.hidden = false;
+  };
+  const leaveWalk = () => {
+    if (!walk.active) return false;
+    walk.stop();
+    resize(); // restores the orbit view's field of view for this screen shape
+    controls.enabled = true;
+    walkButton.setAttribute('aria-pressed', 'false');
+    root.classList.remove('walking');
+    root.querySelector<HTMLElement>('.v-cross')!.hidden = true;
+    root.querySelector('.v-hint')!.textContent = HINT_ORBIT;
+    // Fly back up to where the orbit view was left.
+    const ahead = camera.getWorldDirection(new THREE.Vector3()).multiplyScalar(30).add(camera.position);
+    flight = { start: timer.getElapsed(), from: camera.position.clone(), fromTarget: ahead,
+      to: overview.position.clone(), toTarget: overview.target.clone() };
+    return true;
+  };
+  walkHook.leave = leaveWalk;
+
   const frame = () => {
     if (signal.aborted) return;
     timer.update();
@@ -495,10 +556,11 @@ async function buildViewer(opts: ViewerOptions, root: HTMLElement, signal: Abort
         root.querySelector('[data-act=spin]')!.setAttribute('aria-pressed', String(controls.autoRotate));
       }
     }
-    controls.update(dt);
+    if (walk.active) walk.update(dt);
+    else controls.update(dt);
     quality.sample(dt);
     streets.update(dt);
-    const showFine = quality.level !== 'low' && camera.position.distanceTo(controls.target) < H * 2.7;
+    const showFine = quality.level !== 'low' && (walk.active || camera.position.distanceTo(controls.target) < H * 2.7);
     for (const mesh of fineMeshes) mesh.visible = showFine;
     if (night) {
       sparkle.points.visible = elapsed < twinkleUntil;
@@ -514,6 +576,13 @@ async function buildViewer(opts: ViewerOptions, root: HTMLElement, signal: Abort
   root.querySelector('.v-bar')!.addEventListener('click', (e) => {
     const b = (e.target as HTMLElement).closest('button');
     if (!b) return;
+    if (b.dataset.act === 'walk') {
+      if (walk.active) leaveWalk();
+      else enterWalk();
+      return;
+    }
+    // The other camera modes take over from walking.
+    if (b.dataset.act === 'spin' || b.dataset.act === 'street') leaveWalk();
     if (b.dataset.act === 'spin') {
       controls.autoRotate = !controls.autoRotate;
       b.setAttribute('aria-pressed', String(controls.autoRotate));
@@ -541,7 +610,7 @@ async function buildViewer(opts: ViewerOptions, root: HTMLElement, signal: Abort
     }
   });
   // Expose for debugging / automated checks.
-  Object.assign(window, { viewer3d: { scene, camera, controls, usingFallback, quality, traffic: streets, close } });
+  Object.assign(window, { viewer3d: { scene, camera, controls, usingFallback, quality, traffic: streets, walk, close } });
 }
 
 // ---------------------------------------------------------------------- helpers

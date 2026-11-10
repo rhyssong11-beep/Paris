@@ -208,3 +208,53 @@ test('fits the controls on mobile and keeps manual quality available', async ({ 
   await page.keyboard.press('Escape');
   await expect(page.locator('#viewer')).toHaveCount(0);
 });
+
+test('walk around the tower on foot with W/A/S/D and leave with Escape', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  await openFromMap(page);
+  const walkButton = page.locator('#viewer [data-act=walk]');
+  await walkButton.click();
+  await expect(walkButton).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('#viewer .v-cross')).toBeVisible();
+  await expect(page.locator('#viewer .v-hint')).toContainText('W A S D');
+  // The camera glides down to eye level (a person's height above the ground it stands on).
+  await page.waitForFunction(() => {
+    const { walk, camera } = (window as any).viewer3d;
+    return walk.active && Math.abs(camera.position.y - (walk.walker.y + 1.68)) < 0.05;
+  }, null, { timeout: 30000 });
+  const before = await page.evaluate(() => ({ ...(window as any).viewer3d.walk.walker }));
+  expect(before.y).toBeLessThan(3);
+
+  // Forward (W) heads towards the tower at the origin; the camera follows the walker.
+  await page.keyboard.down('KeyW');
+  await page.waitForFunction((z) => (window as any).viewer3d.walk.walker.z < z - 0.5, before.z, { timeout: 30000 });
+  await page.keyboard.up('KeyW');
+  const cam = await page.evaluate(() => {
+    const { walk, camera } = (window as any).viewer3d;
+    return { dx: camera.position.x - walk.walker.x, dz: camera.position.z - walk.walker.z, orbit: (window as any).viewer3d.controls.enabled };
+  });
+  expect(Math.hypot(cam.dx, cam.dz)).toBeLessThan(0.01);
+  expect(cam.orbit).toBe(false);
+  // Sideways (D) moves along x without turning.
+  const mid = await page.evaluate(() => ({ ...(window as any).viewer3d.walk.walker }));
+  await page.keyboard.down('KeyD');
+  await page.waitForFunction((x) => (window as any).viewer3d.walk.walker.x > x + 0.3, mid.x, { timeout: 30000 });
+  await page.keyboard.up('KeyD');
+  expect(await page.evaluate(() => (window as any).viewer3d.walk.walker.yaw)).toBeCloseTo(mid.yaw, 5);
+
+  // Dragging the mouse turns the view (the fallback when the pointer cannot be captured).
+  const yaw = await page.evaluate(() => (window as any).viewer3d.walk.walker.yaw);
+  await page.mouse.move(500, 300);
+  await page.mouse.down();
+  await page.mouse.move(700, 300, { steps: 4 });
+  await page.mouse.up();
+  expect(await page.evaluate(() => (window as any).viewer3d.walk.walker.yaw)).not.toBeCloseTo(yaw, 2);
+
+  // Escape leaves walk mode but keeps the viewer open; orbit controls come back.
+  await page.keyboard.press('Escape');
+  await expect(walkButton).toHaveAttribute('aria-pressed', 'false');
+  await expect(page.locator('#viewer')).toBeVisible();
+  expect(await page.evaluate(() => (window as any).viewer3d.controls.enabled)).toBe(true);
+  expect(errors).toEqual([]);
+});
