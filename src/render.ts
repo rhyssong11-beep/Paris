@@ -325,8 +325,9 @@ export class Renderer {
     }
 
     // Landmarks stand above everything else on the map.
+    const hr = (((sim.time % 86400) + 86400) % 86400) / 3600;
+    const night = hr < 6.5 || hr > 20.5;
     ctx.lineJoin = 'round';
-    ctx.lineWidth = 0.6;
     for (const lm of this.landmarks) {
       const { model } = lm;
       const s = landmarkScale(model, k) * k;
@@ -334,10 +335,17 @@ export class Renderer {
       const by = oy - lm.y * k;
       const reach = model.radius * s;
       if (bx < -reach || bx > W + reach || by < -reach || by - model.height * s * Z_SCALE > H + reach) continue;
-      ctx.fillStyle = 'rgba(0, 0, 0, 0.28)';
+
+      // Soft two-step directional ground shadow (cast north-east by the south-west sun) + night warm halo.
+      ctx.fillStyle = night ? 'rgba(255, 209, 117, 0.1)' : 'rgba(5, 8, 14, 0.22)';
       ctx.beginPath();
-      ctx.ellipse(bx + reach * 0.1, by - reach * 0.08, reach * 0.95, reach * 0.7, 0, 0, Math.PI * 2);
+      ctx.ellipse(bx + reach * 0.14, by - reach * 0.1, reach * 1.02, reach * 0.72, 0, 0, Math.PI * 2);
       ctx.fill();
+      ctx.fillStyle = 'rgba(5, 8, 14, 0.32)';
+      ctx.beginPath();
+      ctx.ellipse(bx + reach * 0.06, by - reach * 0.04, reach * 0.78, reach * 0.54, 0, 0, Math.PI * 2);
+      ctx.fill();
+
       const sz = s * Z_SCALE;
       for (const f of model.faces) {
         const p = f.pts;
@@ -345,9 +353,14 @@ export class Renderer {
         ctx.moveTo(bx + p[0] * s, by - p[1] * s - p[2] * sz);
         for (let i = 3; i < p.length; i += 3) ctx.lineTo(bx + p[i] * s, by - p[i + 1] * s - p[i + 2] * sz);
         ctx.closePath();
-        ctx.fillStyle = ctx.strokeStyle = f.fill;
+        const fill = night && f.nightFill ? f.nightFill : f.fill;
+        if (f.alpha !== undefined) ctx.globalAlpha = f.alpha;
+        ctx.fillStyle = fill;
         ctx.fill();
+        ctx.strokeStyle = f.stroke ?? fill;
+        ctx.lineWidth = f.stroke ? Math.min(1.1, Math.max(0.45, s * 0.35)) : 0.55;
         ctx.stroke();
+        if (f.alpha !== undefined) ctx.globalAlpha = 1;
       }
     }
   }

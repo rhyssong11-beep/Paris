@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { beforeAll, describe, expect, it } from 'vitest';
 import type { CityData } from './types';
 import { Simulation, State, DAY } from './sim';
+import { landmarkModel } from './landmarks';
 
 let data: CityData;
 beforeAll(() => {
@@ -96,4 +97,17 @@ describe('a simulated day', () => {
     run(sim, DAY + 2.9 * 3600);
     expect(sim.stats.atHome).toBeGreaterThan(sim.agents.length * 0.97);
   }, 120000);
+});
+
+describe('3D landmarks', () => {
+  it('builds detailed 3D models for all 26 Paris landmarks', () => {
+    expect(data.pois.length).toBe(26);
+    for (const poi of data.pois) {
+      const m = landmarkModel(poi.name);
+      expect(m, `missing 3D model for ${poi.name}`).not.toBeNull();
+      expect(m!.faces.length).toBeGreaterThan(30);
+      expect(m!.height).toBeGreaterThan(10);
+      expect(m!.radius).toBeGreaterThan(15);
+    }
+  });
 });

@@ -2,6 +2,7 @@ import './style.css';
 import type { CityData } from './types';
 import { Simulation, DAY } from './sim';
 import { Renderer, COLORS } from './render';
+import { landmarkModel, landmarkScale, Z_SCALE } from './landmarks';
 import { fmtClock } from './util';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -145,11 +146,16 @@ async function main() {
       });
     }
     if (!html) {
-      best = 12;
+      best = 16;
       for (const p of data.pois) {
         const [tx, ty] = view.toScreen(p.x, p.y);
-        const d = Math.hypot(tx - sx, ty - sy);
-        if (d < best) {
+        const m = landmarkModel(p.name);
+        const s = m ? landmarkScale(m, view.cam.k) * view.cam.k : 1;
+        const r = m ? Math.max(14, m.radius * s * 0.7) : 12;
+        const topY = m ? ty - m.height * s * Z_SCALE : ty;
+        const cy = Math.min(ty, Math.max(topY, sy));
+        const d = Math.hypot(tx - sx, cy - sy);
+        if (d < r && d < best) {
           best = d;
           html = `<b>${p.name}</b>`;
         }
