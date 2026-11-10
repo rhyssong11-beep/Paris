@@ -38,6 +38,7 @@ export async function openViewer(opts: ViewerOptions) {
   root.setAttribute('aria-label', `${opts.name} 3D 보기`);
   root.innerHTML = `
     <canvas></canvas>
+    <div class="v-vignette"></div>
     <div class="v-title"><h2></h2><p></p></div>
     <div class="v-bar">
       <button data-act="day">☀ 낮</button>
@@ -106,7 +107,21 @@ export async function openViewer(opts: ViewerOptions) {
 
   const scene = new THREE.Scene();
   const pmrem = new THREE.PMREMGenerator(renderer);
-  const envMap = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+  const envMap = pmrem.fromScene(new RoomEnvironment(), 0.04).texture; // neutral studio light, used at night
+  // Daytime reflections come from the same sky and ground the viewer shows, so the iron picks up
+  // warm light from the horizon and cool light from above instead of a white studio.
+  const DAY_SKY = ['#2c69bd', '#86b7e6', '#f1e2c9'];
+  const dayEnv = (() => {
+    const env = new THREE.Scene();
+    const dome = new THREE.Mesh(
+      new THREE.SphereGeometry(50, 32, 16),
+      new THREE.MeshBasicMaterial({ map: gradientTexture([...DAY_SKY, '#8a8577', '#6f6a5e']), side: THREE.BackSide }),
+    );
+    env.add(dome);
+    const tex = pmrem.fromScene(env, 0.02).texture;
+    dome.geometry.dispose();
+    return tex;
+  })();
   scene.environment = envMap;
 
   const H = opts.height;
@@ -124,9 +139,11 @@ export async function openViewer(opts: ViewerOptions) {
 
   const hemi = new THREE.HemisphereLight(0xcfe6ff, 0x4a4436, 1);
   const sun = new THREE.DirectionalLight(0xfff1dc, 3);
-  sun.position.set(-H * 0.9, H * 1.5, H * 0.7);
+  // A fairly low afternoon sun: long shadows and strong modelling on the ironwork.
+  sun.position.set(-H * 1.1, H * 1.0, H * 0.75);
   sun.castShadow = true;
-  sun.shadow.mapSize.set(2048, 2048);
+  sun.shadow.mapSize.set(4096, 4096);
+  sun.shadow.normalBias = 0.6;
   const sc = sun.shadow.camera;
   sc.left = sc.bottom = -H * 0.9;
   sc.right = sc.top = H * 0.9;
@@ -136,7 +153,7 @@ export async function openViewer(opts: ViewerOptions) {
   scene.add(hemi, sun);
 
   // Ground: a soft-edged disc so the horizon fades into the sky.
-  const groundMat = new THREE.MeshStandardMaterial({ color: 0x6f7f5f, roughness: 1, metalness: 0 });
+  const groundMat = new THREE.MeshStandardMaterial({ color: 0x8a8577, roughness: 1, metalness: 0 });
   const ground = new THREE.Mesh(new THREE.CircleGeometry(H * 12, 96), groundMat);
   ground.rotation.x = -Math.PI / 2;
   ground.receiveShadow = true;
@@ -148,6 +165,8 @@ export async function openViewer(opts: ViewerOptions) {
   plaza.position.y = 0.05;
   plaza.receiveShadow = true;
   scene.add(ground, plaza);
+  const city = buildCity(H);
+  scene.add(city.group);
 
   // Stars (night only).
   const starGeo = new THREE.BufferGeometry();
@@ -167,7 +186,7 @@ export async function openViewer(opts: ViewerOptions) {
   // Post-processing: bloom makes the night lighting glow.
   const composer = new EffectComposer(renderer);
   composer.addPass(new RenderPass(scene, camera));
-  const bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.6, 0.5, 0.82);
+  const bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.36, 0.45, 0.9);
   composer.addPass(bloom);
   composer.addPass(new OutputPass());
 
@@ -194,10 +213,10 @@ export async function openViewer(opts: ViewerOptions) {
   // Warm architectural uplights placed along the tower core for 3D depth at night.
   const nightLights = new THREE.Group();
   for (const [ly, intensity, dist] of [
-    [H * 0.11, H * 18, H * 0.7],
-    [H * 0.28, H * 14, H * 0.6],
-    [H * 0.55, H * 10, H * 0.55],
-    [H * 0.82, H * 8, H * 0.45],
+    [H * 0.11, H * 7, H * 0.7],
+    [H * 0.28, H * 5.5, H * 0.6],
+    [H * 0.55, H * 4, H * 0.55],
+    [H * 0.82, H * 3, H * 0.45],
   ]) {
     const pt = new THREE.PointLight(0xffb84d, intensity, dist, 1.6);
     pt.position.set(0, ly, 0);
@@ -231,10 +250,10 @@ export async function openViewer(opts: ViewerOptions) {
   const beacon = new THREE.Group();
   beacon.position.y = H * 0.985;
   for (const dir of [1, -1]) {
-    const len = H * 2.6;
+    const len = H * 3.4; // long enough that the far end is lost in the haze
     const cone = new THREE.Mesh(
-      new THREE.ConeGeometry(H * 0.035, len, 24, 1, true),
-      new THREE.MeshBasicMaterial({ color: 0xcfe4ff, transparent: true, opacity: 0.045, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide, fog: false }),
+      new THREE.ConeGeometry(H * 0.03, len, 24, 1, true),
+      new THREE.MeshBasicMaterial({ color: 0xcfe4ff, transparent: true, opacity: 0.028, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide, fog: false }),
     );
     cone.rotation.z = (dir * Math.PI) / 2; // apex at the tower, widening outwards
     cone.position.x = (dir * len) / 2;
@@ -245,27 +264,30 @@ export async function openViewer(opts: ViewerOptions) {
   // ------------------------------------------------------------------ day / night
   let night = opts.night;
   const applyMode = () => {
-    const sky = night ? ['#02040b', '#0b1530', '#1d2444'] : ['#3f86d9', '#9cc8f2', '#e9eef2'];
+    const sky = night ? ['#02040b', '#0b1530', '#1d2444'] : DAY_SKY;
     scene.background = gradientTexture(sky);
-    scene.fog = new THREE.Fog(night ? 0x141b36 : 0xdfe8ee, H * 4, H * 13);
-    scene.environmentIntensity = night ? 0.14 : 0.9;
-    hemi.intensity = night ? 0.18 : 1.1;
-    hemi.color.set(night ? 0x5a6cb0 : 0xcfe6ff);
-    sun.intensity = night ? 0.28 : 3.2;
-    sun.color.set(night ? 0x9db4ff : 0xfff1dc);
-    groundMat.color.set(night ? 0x1a2030 : 0x6f7f5f);
+    scene.fog = new THREE.Fog(night ? 0x141b36 : 0xe9dcc6, H * 3.5, H * 12);
+    scene.environment = night ? envMap : dayEnv;
+    scene.environmentIntensity = night ? 0.14 : 0.6;
+    hemi.intensity = night ? 0.09 : 0.4;
+    hemi.color.set(night ? 0x5a6cb0 : 0xbcd6f5);
+    hemi.groundColor.set(night ? 0x20202a : 0x6b6252);
+    sun.intensity = night ? 0.1 : 2.7;
+    sun.color.set(night ? 0x9db4ff : 0xffe3bd);
+    groundMat.color.set(night ? 0x1a2030 : 0x8a8577);
+    city.setNight(night);
     (plaza.material as THREE.MeshStandardMaterial).color.set(night ? 0x3a3a44 : 0xb9b3a6);
-    renderer.toneMappingExposure = night ? 1.12 : 1;
+    renderer.toneMappingExposure = night ? 0.95 : 0.86;
     bloom.enabled = night;
     stars.visible = sparkle.points.visible = beacon.visible = nightLights.visible = night;
     for (const [m, day] of mats) {
       if (night) {
         if (day.role === 'glow') {
           m.emissive.copy(WARM_WINDOW);
-          m.emissiveIntensity = 1.65;
+          m.emissiveIntensity = 1.2;
         } else if (day.role === 'tower') {
           m.emissive.copy(GOLD);
-          m.emissiveIntensity = 0.34;
+          m.emissiveIntensity = 0.26;
         } else if (day.role === 'stone') {
           m.emissive.copy(GOLD);
           m.emissiveIntensity = 0.12;
@@ -335,6 +357,7 @@ export async function openViewer(opts: ViewerOptions) {
       }
     });
     envMap.dispose();
+    dayEnv.dispose();
     pmrem.dispose();
     composer.dispose();
     renderer.dispose();
@@ -465,6 +488,90 @@ function makeSparkles(model: THREE.Object3D) {
         col[i * 3 + 2] = b * 2.6;
       }
       colAttr.needsUpdate = true;
+    },
+  };
+}
+
+/**
+ * The city around the monument: blocks of cream stone buildings with zinc roofs on a street grid,
+ * the Seine with a bridge on the tower's axis, and the long lawn of the Champ de Mars. It is only a
+ * backdrop (it fades into the haze), but it gives the tower a place to stand and a sense of scale.
+ */
+function buildCity(H: number) {
+  const group = new THREE.Group();
+  const rand = (() => {
+    let a = 20260711;
+    return () => ((a = (Math.imul(a, 1664525) + 1013904223) >>> 0) / 4294967296);
+  })();
+  const CELL = 64;
+  const R_IN = H * 0.8;
+  const R_OUT = H * 8;
+  const RIVER: [number, number] = [H * 0.95, H * 1.38]; // z range
+  const PARK_HALF = 115; // x half-width, on the -z side
+
+  const walls: THREE.Matrix4[] = [];
+  const roofs: THREE.Matrix4[] = [];
+  const tints: THREE.Color[] = [];
+  const q = new THREE.Quaternion();
+  for (let gx = -R_OUT; gx <= R_OUT; gx += CELL)
+    for (let gz = -R_OUT; gz <= R_OUT; gz += CELL) {
+      const r = Math.hypot(gx, gz);
+      if (r < R_IN || r > R_OUT) continue;
+      if (gz > RIVER[0] - CELL * 0.6 && gz < RIVER[1] + CELL * 0.6) continue; // river and quays
+      if (Math.abs(gx) < PARK_HALF + CELL * 0.5 && gz < 0 && gz > -H * 3.4) continue; // Champ de Mars
+      if (rand() < 0.06) continue; // squares and gaps
+      const w = CELL - 13 - rand() * 9;
+      const d = CELL - 13 - rand() * 9;
+      const h = 19 + rand() * 8;
+      const x = gx + (rand() - 0.5) * 5;
+      const z = gz + (rand() - 0.5) * 5;
+      const roofH = 5 + rand() * 2.5;
+      walls.push(new THREE.Matrix4().compose(new THREE.Vector3(x, h / 2, z), q, new THREE.Vector3(w, h, d)));
+      roofs.push(new THREE.Matrix4().compose(new THREE.Vector3(x, h + roofH / 2, z), q, new THREE.Vector3(w, roofH, d)));
+      tints.push(new THREE.Color().setHSL(0.1 + rand() * 0.02, 0.22 + rand() * 0.1, 0.74 + rand() * 0.1));
+    }
+  const box = new THREE.BoxGeometry(1, 1, 1);
+  const wallMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.9, metalness: 0 });
+  const roofMat = new THREE.MeshStandardMaterial({ color: 0x6d7884, roughness: 0.6, metalness: 0.2 });
+  const wallMesh = new THREE.InstancedMesh(box, wallMat, walls.length);
+  // Mansard roof: a four-sided frustum, one unit wide and tall, that slopes in towards a flat top.
+  const mansard = new THREE.CylinderGeometry(0.5, Math.SQRT1_2, 1, 4, 1).rotateY(Math.PI / 4);
+  const roofMesh = new THREE.InstancedMesh(mansard, roofMat, roofs.length);
+  walls.forEach((m, i) => {
+    wallMesh.setMatrixAt(i, m);
+    wallMesh.setColorAt(i, tints[i]);
+    roofMesh.setMatrixAt(i, roofs[i]);
+  });
+  group.add(wallMesh, roofMesh);
+
+  const flat = (w: number, d: number, x: number, z: number, y: number, mat: THREE.Material) => {
+    const m = new THREE.Mesh(new THREE.PlaneGeometry(w, d), mat);
+    m.rotation.x = -Math.PI / 2;
+    m.position.set(x, y, z);
+    m.receiveShadow = true;
+    group.add(m);
+    return m;
+  };
+  const waterMat = new THREE.MeshStandardMaterial({ color: 0x4d6b78, roughness: 0.18, metalness: 0.35 });
+  flat(R_OUT * 2.2, RIVER[1] - RIVER[0], 0, (RIVER[0] + RIVER[1]) / 2, 0.15, waterMat);
+  const lawnMat = new THREE.MeshStandardMaterial({ color: 0x5c7a45, roughness: 1, metalness: 0 });
+  flat(PARK_HALF * 2 - 30, H * 2.7, 0, -H * 2.0, 0.12, lawnMat);
+  const stoneMat = new THREE.MeshStandardMaterial({ color: 0xcfc6b4, roughness: 0.9, metalness: 0 });
+  const bridge = new THREE.Mesh(new THREE.BoxGeometry(36, 5, RIVER[1] - RIVER[0] + 30), stoneMat);
+  bridge.position.set(0, 2.5, (RIVER[0] + RIVER[1]) / 2);
+  group.add(bridge);
+
+  return {
+    group,
+    setNight(night: boolean) {
+      // At night the stone goes dark and a faint warm glow stands in for lit windows and street lamps.
+      wallMat.color.set(night ? 0x2a2f3d : 0xffffff);
+      wallMat.emissive.set(night ? 0xffb35c : 0x000000);
+      wallMat.emissiveIntensity = night ? 0.03 : 0;
+      roofMat.color.set(night ? 0x1a1f2a : 0x6d7884);
+      waterMat.color.set(night ? 0x0d1522 : 0x4d6b78);
+      lawnMat.color.set(night ? 0x141c16 : 0x5c7a45);
+      stoneMat.color.set(night ? 0x3a3a44 : 0xcfc6b4);
     },
   };
 }

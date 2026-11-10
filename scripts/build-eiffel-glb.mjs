@@ -187,14 +187,14 @@ class MeshBucket {
 // ------------------------------------------------------------------ PBR Material definitions
 const buckets = {
   tower_iron: new MeshBucket('Tower_Iron', {
-    baseColorFactor: [0.51, 0.39, 0.29, 1.0], // authentic Eiffel bronze-brown
-    metallicFactor: 0.68,
-    roughnessFactor: 0.48,
+    baseColorFactor: [0.44, 0.33, 0.24, 1.0], // authentic Eiffel bronze-brown (painted iron: mostly matte)
+    metallicFactor: 0.3,
+    roughnessFactor: 0.62,
   }),
   tower_dark_iron: new MeshBucket('Tower_DarkIron', {
-    baseColorFactor: [0.38, 0.29, 0.21, 1.0], // deep structural iron trim & decks
-    metallicFactor: 0.72,
-    roughnessFactor: 0.44,
+    baseColorFactor: [0.31, 0.23, 0.17, 1.0], // deep structural iron trim & decks
+    metallicFactor: 0.3,
+    roughnessFactor: 0.6,
   }),
   tower_gold: new MeshBucket('Tower_Gold', {
     baseColorFactor: [0.92, 0.73, 0.26, 1.0], // golden scientific plaques, cupola & filigree
@@ -213,7 +213,7 @@ const buckets = {
     roughnessFactor: 0.85,
   }),
   plaza_stone: new MeshBucket('Plaza_Stone', {
-    baseColorFactor: [0.74, 0.71, 0.65, 1.0], // Champ de Mars gravel & stone walkways
+    baseColorFactor: [0.6, 0.56, 0.49, 1.0], // Champ de Mars gravel & stone walkways
     metallicFactor: 0.04,
     roughnessFactor: 0.9,
   }),

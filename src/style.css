@@ -94,3 +94,5 @@ button[aria-pressed='true'] { background: var(--accent); border-color: var(--acc
 #viewer .v-loading { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); background: #05070b; }
 canvas#live.clickable { cursor: pointer; }
 #viewer.splat [data-act='day'], #viewer.splat [data-act='night'] { display: none; }
+#viewer .v-vignette { position: absolute; inset: 0; pointer-events: none; background: radial-gradient(ellipse at 50% 45%, transparent 55%, rgba(0, 0, 0, 0.38) 100%); }
+#viewer.splat .v-vignette { display: none; }
