@@ -11,6 +11,7 @@
     "data:fetch": "node scripts/fetch-data.mjs",
     "data:build": "node scripts/build-data.mjs",
     "model:eiffel": "node scripts/build-eiffel-glb.mjs",
+    "model:louvre": "node scripts/build-louvre-glb.mjs",
     "test:browser": "playwright test"
   },
   "devDependencies": {

@@ -22,6 +22,7 @@ import { disposeObject } from './viewer-resources';
 import { QUALITY, ViewerQuality } from './viewer-quality';
 import { buildCity } from './viewer-city';
 import { buildStreets } from './viewer-streets';
+import { buildLouvreNightLights, buildLouvreSurroundings } from './viewer-louvre';
 
 const SPARKLES = 2600;
 const GOLD = new THREE.Color('#ffb347');
@@ -211,7 +212,10 @@ async function buildViewer(opts: ViewerOptions, root: HTMLElement, signal: Abort
   })();
   scene.environment = envMap;
 
-  const H = opts.height;
+  // `site` is set for landmarks other than the Eiffel Tower, whose setting is the default below.
+  const site = opts.site;
+  const H = site?.span ?? opts.height;
+  if (site) root.classList.add(`site-${site.kind}`);
   const camera = new THREE.PerspectiveCamera(38, 1, 1, H * 40);
   camera.position.set(H * 1.38, H * 0.66, H * 1.38);
   const controls = new OrbitControls(camera, canvas);
@@ -221,7 +225,11 @@ async function buildViewer(opts: ViewerOptions, root: HTMLElement, signal: Abort
   controls.dampingFactor = 0.06;
   controls.autoRotate = true;
   controls.autoRotateSpeed = 0.7;
-  controls.minDistance = H * 0.25;
+  controls.minDistance = site ? 25 : H * 0.25;
+  if (site) {
+    camera.position.set(...site.camera.position);
+    controls.target.set(...site.camera.target);
+  }
   controls.maxDistance = H * 4;
   controls.maxPolarAngle = Math.PI * 0.497; // stay above the ground
 
@@ -233,12 +241,18 @@ async function buildViewer(opts: ViewerOptions, root: HTMLElement, signal: Abort
   sun.shadow.mapSize.set(4096, 4096);
   sun.shadow.normalBias = 0.6;
   const sc = sun.shadow.camera;
-  sc.left = sc.bottom = -H * 0.9;
-  sc.right = sc.top = H * 0.9;
+  sc.left = sc.bottom = -(site?.detail.half ?? H * 0.9);
+  sc.right = sc.top = site?.detail.half ?? H * 0.9;
+  if (site) {
+    // Aim the sun's shadow area at the middle of the site rather than at the origin.
+    sun.position.x += site.detail.x;
+    sun.position.z += site.detail.z;
+    sun.target.position.set(site.detail.x, 0, site.detail.z);
+  }
   sc.near = 1;
   sc.far = H * 4;
   sun.shadow.bias = -0.0004;
-  scene.add(hemi, sun);
+  scene.add(hemi, sun, sun.target);
 
   // Ground: a soft-edged disc so the horizon fades into the sky.
   const groundMat = new THREE.MeshStandardMaterial({ color: 0x8a8577, roughness: 1, metalness: 0 });
@@ -253,10 +267,15 @@ async function buildViewer(opts: ViewerOptions, root: HTMLElement, signal: Abort
   plaza.position.y = 0.05;
   plaza.receiveShadow = true;
   scene.add(ground, plaza);
-  const city = buildCity(H);
+  const city = site ? buildLouvreSurroundings(H) : buildCity(H);
   scene.add(city.group);
   const streets = buildStreets();
   scene.add(streets.group);
+  if (site) {
+    // The animated pedestrians and traffic follow routes laid out for the Eiffel Tower's streets.
+    streets.group.visible = false;
+    streets.setPaused(true);
+  }
   root.querySelector('[data-act=traffic]')!.setAttribute('aria-pressed', String(!streets.paused));
 
   // Stars (night only).
@@ -285,7 +304,9 @@ async function buildViewer(opts: ViewerOptions, root: HTMLElement, signal: Abort
   // Ambient occlusion: darkens the places light struggles to reach (between girders, under the
   // platforms, where trees and kerbs meet the ground), which is what gives the model depth.
   const ao = new GTAOPass(scene, camera, 1, 1);
-  ao.setSceneClipBox(new THREE.Box3(new THREE.Vector3(-H * 0.7, -1, -H * 0.8), new THREE.Vector3(H * 0.7, H * 1.05, H * 0.8)));
+  ao.setSceneClipBox(site
+    ? new THREE.Box3(new THREE.Vector3(site.detail.x - site.detail.half, -1, site.detail.z - site.detail.half), new THREE.Vector3(site.detail.x + site.detail.half, 80, site.detail.z + site.detail.half))
+    : new THREE.Box3(new THREE.Vector3(-H * 0.7, -1, -H * 0.8), new THREE.Vector3(H * 0.7, H * 1.05, H * 0.8)));
   ao.blendIntensity = 0.65;
   ao.updateGtaoMaterial({ radius: 3, distanceExponent: 1.3, thickness: 2.5, scale: 1.25, samples: 12, screenSpaceRadius: false });
   ao.updatePdMaterial({ lumaPhi: 10, depthPhi: 2, normalPhi: 3, radius: 5, rings: 2, samples: 8 });
@@ -298,9 +319,10 @@ async function buildViewer(opts: ViewerOptions, root: HTMLElement, signal: Abort
   let usingFallback = false;
   let model: THREE.Object3D;
   try {
-    model = await loadGlb(`${base}${opts.modelUrl}`, `${base}draco/`, H, signal);
-  } catch {
+    model = await loadGlb(`${base}${opts.modelUrl}`, `${base}draco/`, site?.metric ? null : H, signal);
+  } catch (err) {
     signal.throwIfAborted();
+    if (site) throw err; // only the Eiffel Tower has a built-in stand-in model
     usingFallback = true;
     model = buildEiffel(H);
   }
@@ -319,7 +341,8 @@ async function buildViewer(opts: ViewerOptions, root: HTMLElement, signal: Abort
 
   // Light the surfaces from within, keeping the unlit sides of the ironwork dark.
   const nightLights = new THREE.Group();
-  for (const [y, width, targetY, targetWidth, intensity] of [
+  if (site) nightLights.add(buildLouvreNightLights());
+  for (const [y, width, targetY, targetWidth, intensity] of site ? [] : [
     [7, 43, 80, 24, 56000],
     [119, 14, 250, 4, 85000],
   ]) {
@@ -409,9 +432,10 @@ async function buildViewer(opts: ViewerOptions, root: HTMLElement, signal: Abort
     renderer.toneMappingExposure = night ? 1.05 : 0.9;
     bloom.enabled = night && QUALITY[quality.level].bloom;
     ao.enabled = !night && QUALITY[quality.level].aoScale > 0;
-    stars.visible = beacon.visible = nightLights.visible = night;
+    stars.visible = nightLights.visible = night;
+    beacon.visible = night && !site; // the summit beacon and the twinkle belong to the Eiffel Tower
     sparkle.points.visible = night && twinkleUntil > 0;
-    twinkleButton.hidden = !night;
+    twinkleButton.hidden = !night || !!site;
     if (!night) { twinkleUntil = 0; twinkleButton.setAttribute('aria-pressed', 'false'); }
     for (const [m, day] of mats) {
       if (night) {
@@ -488,17 +512,18 @@ async function buildViewer(opts: ViewerOptions, root: HTMLElement, signal: Abort
   // ------------------------------------------------------------------ walking around on foot
   const HINT_ORBIT = root.querySelector('.v-hint')!.textContent!;
   const walkButton = root.querySelector<HTMLButtonElement>('[data-act=walk]')!;
-  const WALK_RADIUS = 540;
+  const WALK_RADIUS = site?.walk.radius ?? 540;
   const walk = new WalkMode({
     camera,
     canvas,
     grid: () => buildWalkGrid([model, city.group], WALK_RADIUS + 20),
     allowed: (x, z) => {
       if (Math.hypot(x, z) > WALK_RADIUS) return false; // the edge of the detailed scene
+      if ('allowed' in city) return city.allowed(x, z);
       const { z0, z1, bridgeHalfWidth } = city.river;
       return z < z0 || z > z1 || Math.abs(x) < bridgeHalfWidth - 1; // the Seine, except on the bridge
     },
-    start: { x: 0, z: 128, lookAt: [0, H * 0.3, 0] },
+    start: site ? site.walk : { x: 0, z: 128, lookAt: [0, H * 0.3, 0] },
     onExit: () => leaveWalk(),
     onLock: (locked) => {
       root.querySelector('.v-hint')!.textContent = locked
@@ -630,7 +655,8 @@ function gradientTexture(stops: string[], positions = stops.map((_, i) => i / (s
 }
 
 /** Load a GLB, stand it on the ground at the origin and scale it to `height` metres. */
-async function loadGlb(url: string, dracoPath: string, height: number, signal: AbortSignal): Promise<THREE.Object3D> {
+/** `height` scales and centres the model to that many metres tall; null keeps a model that is already in metres about the origin. */
+async function loadGlb(url: string, dracoPath: string, height: number | null, signal: AbortSignal): Promise<THREE.Object3D> {
   // Check first so a missing file fails fast (dev servers answer unknown paths with index.html).
   const response = await fetch(url, { signal: AbortSignal.any([signal, AbortSignal.timeout(20000)]) });
   if (!response.ok || (response.headers.get('content-type') ?? '').includes('text/html')) throw new Error('no model file');
@@ -646,6 +672,10 @@ async function loadGlb(url: string, dracoPath: string, height: number, signal: A
   const size = box.getSize(new THREE.Vector3());
   if (!(size.y > 0)) { disposeObject(obj); throw new Error('empty model'); }
   const wrap = new THREE.Group();
+  if (height === null) {
+    wrap.add(obj);
+    return wrap;
+  }
   const s = height / size.y;
   // The generated file includes asymmetric garden approaches. Anchor the tower, rather than the
   // bounds of the whole site, so its plaza remains aligned with local streets and walking paths.

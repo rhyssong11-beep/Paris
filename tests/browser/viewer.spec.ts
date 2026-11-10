@@ -258,3 +258,46 @@ test('walk around the tower on foot with W/A/S/D and leave with Escape', async (
   expect(await page.evaluate(() => (window as any).viewer3d.controls.enabled)).toBe(true);
   expect(errors).toEqual([]);
 });
+
+test('open the Louvre in 3D and walk in its courtyard', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  await page.waitForFunction(() => (window as any).view?.width === window.innerWidth);
+  // Zoom the map in on the Louvre so its neighbours don't overlap the click.
+  const point = await page.evaluate(() => {
+    const { sim, view } = (window as any);
+    const poi = sim.data.pois.find((p: any) => p.name === 'Musée du Louvre');
+    view.cam.x = poi.x; view.cam.y = poi.y; view.cam.k = 0.5; view.invalidate();
+    const [x, y] = view.toScreen(poi.x, poi.y);
+    return { x, y: y - 6 };
+  });
+  await page.mouse.move(point.x, point.y);
+  await expect(page.locator('#tip')).toContainText('클릭해서 3D로 보기');
+  await page.mouse.click(point.x, point.y);
+  await expect(page.locator('#viewer h2')).toHaveText('Musée du Louvre');
+  await expect(page.locator('#viewer .v-loading')).toHaveCount(0);
+  expect(await page.evaluate(() => (window as any).viewer3d.usingFallback)).toBe(false);
+  // Eiffel-only controls are not offered here.
+  await expect(page.locator('#viewer [data-act=street]')).toBeHidden();
+  await expect(page.locator('#viewer [data-act=traffic]')).toBeHidden();
+  await page.locator('#viewer [data-act=night]').click();
+  await expect(page.locator('#viewer [data-act=twinkle]')).toBeHidden();
+
+  await page.locator('#viewer [data-act=walk]').click();
+  await page.waitForFunction(() => (window as any).viewer3d.walk.active && (window as any).viewer3d.walk.walker);
+  const start = await page.evaluate(() => ({ ...(window as any).viewer3d.walk.walker }));
+  expect(start.x).toBeCloseTo(-100, 0);
+  expect(start.y).toBeCloseTo(0.3, 1); // standing on the courtyard paving
+  // Walking straight at the pyramid ends at its base rather than inside it.
+  const stopped = await page.evaluate(() => {
+    const w = (window as any).viewer3d.walk.walker;
+    for (let t = 0; t < 30; t += 1 / 30) w.step({ forward: 1, right: 0, run: false }, 1 / 30);
+    return w.x;
+  });
+  expect(stopped).toBeLessThan(-17);
+  expect(stopped).toBeGreaterThan(-22);
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('Escape');
+  await expect(page.locator('#viewer')).toHaveCount(0);
+  expect(errors).toEqual([]);
+});

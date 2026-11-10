@@ -9,6 +9,7 @@
 | 파일 이름 (확장자 제외) | 랜드마크 |
 |---|---|
 | `eiffel` | Tour Eiffel |
+| `louvre` | Musée du Louvre (`louvre.glb`, `npm run model:louvre`로 생성. 미터 단위 그대로 사용되므로 크기 자동 맞춤 없음) |
 
 ## 가우시안 스플랫 파일 조건
 

@@ -116,3 +116,5 @@ canvas#live.clickable { cursor: pointer; }
 #viewer.splat [data-act='walk'] { display: none; }
 /* Walking needs a keyboard and a mouse. */
 @media (hover: none), (pointer: coarse) { #viewer [data-act='walk'] { display: none; } }
+/* Buttons for features that only exist at the Eiffel Tower. */
+#viewer[class*='site-'] [data-act='street'], #viewer[class*='site-'] [data-act='traffic'] { display: none; }

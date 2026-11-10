@@ -2,8 +2,10 @@
 export interface ViewerEntry {
   /** GLB file under public/, tried first; the built-in procedural model is the fallback */
   modelUrl: string;
-  /** real-world height in metres; loaded models are scaled to it */
+  /** real-world height in metres; loaded models are scaled to it (unless `site.metric`) */
   height: number;
+  /** what surrounds the landmark and how the viewer behaves there; defaults to the Eiffel Tower's site */
+  site?: ViewerSite;
   subtitle: string;
   /** attribution for the model file, shown in the viewer (required for CC BY models) */
   credit?: string;
@@ -12,6 +14,21 @@ export interface ViewerEntry {
    * looks for .spz, .sog, .ksplat, .splat and .ply in that order.
    */
   splat?: SplatConfig;
+}
+
+/** Everything about the viewer that differs from one landmark to the next. */
+export interface ViewerSite {
+  kind: 'louvre';
+  /** the model is already in metres around the origin: use it as it is instead of fitting it to `height` */
+  metric: true;
+  /** size of the scene in metres, which sets camera range, fog and shadow distances (the Eiffel Tower uses its height) */
+  span: number;
+  /** opening view */
+  camera: { position: [number, number, number]; target: [number, number, number] };
+  /** centre and half-size of the area that receives sharp shadows and ambient occlusion */
+  detail: { x: number; z: number; half: number };
+  /** where "걸어서 보기" starts, what it faces, and how far from the origin you may go */
+  walk: { x: number; z: number; lookAt: [number, number, number]; radius: number };
 }
 
 export interface SplatConfig {
@@ -32,5 +49,18 @@ export const VIEWABLE: Record<string, ViewerEntry> = {
     splat: { path: 'models/eiffel' },
     height: 330,
     subtitle: '1889 · 높이 330 m · 귀스타브 에펠',
+  },
+  'Musée du Louvre': {
+    modelUrl: 'models/louvre.glb',
+    height: 52,
+    subtitle: '궁전 12–19세기 · 유리 피라미드 1989 · I. M. 페이',
+    site: {
+      kind: 'louvre',
+      metric: true,
+      span: 330,
+      camera: { position: [-250, 150, 235], target: [-20, 10, 0] },
+      detail: { x: -60, z: 0, half: 330 },
+      walk: { x: -100, z: 0, lookAt: [0, 12, 0], radius: 620 },
+    },
   },
 };
