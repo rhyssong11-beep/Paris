@@ -171,6 +171,41 @@ class MeshBucket {
   }
 
   /** Full sphere centred at (cx, yc, cz). */
+  /**
+   * Organic lump for tree crowns: an ellipsoid whose surface is pushed in and out by a little
+   * noise, with smooth per-vertex normals so it reads as a soft leafy mass rather than a faceted ball.
+   */
+  addBlob(cx, cy, cz, rx, ry, rz, seed = 0, segs = 11, bands = 7) {
+    const base = this.pos.length / 3;
+    const wobble = (x, y, z) =>
+      0.2 * Math.sin(x * 2.3 + seed) * Math.sin(y * 2.9 + seed * 1.7) * Math.sin(z * 2.6 + seed * 0.6) +
+      0.09 * Math.sin(x * 5.7 + seed * 2.1) * Math.sin(y * 6.3 + seed) * Math.sin(z * 5.2 + seed * 1.3);
+    for (let b = 0; b <= bands; b++) {
+      const phi = (b / bands) * Math.PI;
+      for (let i = 0; i <= segs; i++) {
+        const th = (i / segs) * Math.PI * 2;
+        const ux = Math.sin(phi) * Math.cos(th);
+        const uy = Math.cos(phi);
+        const uz = Math.sin(phi) * Math.sin(th);
+        // Poles and the seam share one direction each, so they stay closed.
+        const f = 1 + wobble(ux * 3, uy * 3, uz * 3);
+        this.pos.push(cx + ux * rx * f, cy + uy * ry * f, cz + uz * rz * f);
+        const nx = ux / rx;
+        const ny = uy / ry;
+        const nz = uz / rz;
+        const l = Math.hypot(nx, ny, nz) || 1;
+        this.norm.push(nx / l, ny / l, nz / l);
+      }
+    }
+    const row = segs + 1;
+    for (let b = 0; b < bands; b++)
+      for (let i = 0; i < segs; i++) {
+        const a = base + b * row + i;
+        const c = a + row;
+        this.idx.push(a, a + 1, c, a + 1, c + 1, c); // counter-clockwise seen from outside
+      }
+  }
+
   addSphere(cx, yc, cz, r, segs = 16, bands = 6) {
     for (let b = -bands; b < bands; b++) {
       const a0 = (b / bands) * (Math.PI / 2);
@@ -223,14 +258,24 @@ const buckets = {
     roughnessFactor: 0.82,
   }),
   park_lawn: new MeshBucket('Park_Lawn', {
-    baseColorFactor: [0.22, 0.43, 0.27, 1.0], // manicured parterre grass
+    baseColorFactor: [0.27, 0.43, 0.17, 1.0], // manicured parterre grass
     metallicFactor: 0.02,
     roughnessFactor: 0.92,
   }),
   park_foliage: new MeshBucket('Park_Foliage', {
-    baseColorFactor: [0.25, 0.49, 0.31, 1.0], // lush chestnut & plane tree crowns
-    metallicFactor: 0.02,
-    roughnessFactor: 0.88,
+    baseColorFactor: [0.2, 0.36, 0.13, 1.0], // chestnut & plane tree crowns, mid tone
+    metallicFactor: 0.0,
+    roughnessFactor: 0.9,
+  }),
+  park_foliage_dark: new MeshBucket('Park_Foliage_Dark', {
+    baseColorFactor: [0.12, 0.25, 0.09, 1.0], // shaded inner and lower leaves
+    metallicFactor: 0.0,
+    roughnessFactor: 0.95,
+  }),
+  park_foliage_light: new MeshBucket('Park_Foliage_Light', {
+    baseColorFactor: [0.34, 0.48, 0.16, 1.0], // sunlit outer leaves
+    metallicFactor: 0.0,
+    roughnessFactor: 0.85,
   }),
   tree_trunk: new MeshBucket('Tree_Trunk', {
     baseColorFactor: [0.36, 0.27, 0.2, 1.0],
@@ -260,6 +305,8 @@ const {
   plaza_curb: curb,
   park_lawn: lawn,
   park_foliage: foliage,
+  park_foliage_dark: foliageDark,
+  park_foliage_light: foliageLight,
   tree_trunk: trunk,
   fountain_water: water,
   lamp_glow: lampGlow,
@@ -312,14 +359,47 @@ const {
     }
   }
 
-  // Helper to place a lush multi-crown Parisian chestnut/plane tree
+  // Helper to place a Parisian chestnut / plane tree. Every tree is a little different: its size,
+  // lean, branching and the lumps of its crown come from a seeded random stream.
+  let treeSeed = 7;
+  const rnd = () => {
+    treeSeed = (Math.imul(treeSeed, 1664525) + 1013904223) >>> 0;
+    return treeSeed / 4294967296;
+  };
   const addTree = (tx, tz, baseY, h = 13.5, r = 5.2) => {
+    h *= 0.85 + rnd() * 0.4;
+    r *= 0.85 + rnd() * 0.35;
     stone.addFrustum(tx, baseY, tz, 1.6, 1.6, tx, baseY + 0.45, tz, 1.4, 1.4, 8);
-    trunk.addFrustum(tx, baseY + 0.45, tz, 0.55, 0.55, tx, baseY + h * 0.42, tz, 0.35, 0.35, 8);
-    foliage.addSphere(tx, baseY + h * 0.66, tz, r, 12, 5);
-    foliage.addSphere(tx + r * 0.42, baseY + h * 0.56, tz + r * 0.25, r * 0.68, 10, 4);
-    foliage.addSphere(tx - r * 0.38, baseY + h * 0.58, tz - r * 0.3, r * 0.65, 10, 4);
-    foliage.addSphere(tx, baseY + h * 0.85, tz, r * 0.62, 10, 4);
+    // Trunk: flared at the root, tapering, leaning slightly.
+    const lean = [(rnd() - 0.5) * 0.9, (rnd() - 0.5) * 0.9];
+    const forkY = baseY + h * (0.36 + rnd() * 0.08);
+    const fork = [tx + lean[0], forkY, tz + lean[1]];
+    trunk.addFrustum(tx, baseY + 0.45, tz, 0.85, 0.85, tx + lean[0] * 0.15, baseY + 1.6, tz + lean[1] * 0.15, 0.5, 0.5, 8, 0, false);
+    trunk.addBeam([tx + lean[0] * 0.15, baseY + 1.6, tz + lean[1] * 0.15], fork, 0.5, 0.36, 7);
+    const crownY = baseY + h * 0.68;
+    // Limbs reach up and out into the crown.
+    const limbs = 3 + Math.floor(rnd() * 3);
+    const a0 = rnd() * Math.PI * 2;
+    for (let k = 0; k < limbs; k++) {
+      const a = a0 + (k / limbs) * Math.PI * 2 + (rnd() - 0.5) * 0.6;
+      const reach = r * (0.45 + rnd() * 0.3);
+      trunk.addBeam(fork, [tx + Math.cos(a) * reach, crownY - r * 0.15 + rnd() * r * 0.4, tz + Math.sin(a) * reach], 0.3, 0.1, 5);
+    }
+    trunk.addBeam(fork, [tx + lean[0] * 1.6, crownY + r * 0.35, tz + lean[1] * 1.6], 0.32, 0.1, 5);
+    // Crown: a shaded core, a ring of leafy masses around it and sunlit clumps on top.
+    foliageDark.addBlob(tx + lean[0], crownY - r * 0.12, tz + lean[1], r * 0.82, r * 0.7, r * 0.82, rnd() * 50);
+    const lobes = 5 + Math.floor(rnd() * 3);
+    for (let k = 0; k < lobes; k++) {
+      const a = a0 + (k / lobes) * Math.PI * 2 + (rnd() - 0.5) * 0.5;
+      const d = r * (0.5 + rnd() * 0.22);
+      const rr = r * (0.48 + rnd() * 0.2);
+      const y = crownY + (rnd() - 0.45) * r * 0.5;
+      // The sun in the viewer comes from -x / +z, so lobes on that side get the lighter leaves.
+      const sunny = -Math.cos(a) * 0.8 + Math.sin(a) * 0.55 > 0.25;
+      (sunny ? foliageLight : foliage).addBlob(tx + lean[0] + Math.cos(a) * d, y, tz + lean[1] + Math.sin(a) * d, rr, rr * (0.78 + rnd() * 0.2), rr, rnd() * 50, 10, 6);
+    }
+    foliage.addBlob(tx + lean[0] * 1.3, crownY + r * 0.42, tz + lean[1] * 1.3, r * 0.62, r * 0.5, r * 0.62, rnd() * 50, 10, 6);
+    foliageLight.addBlob(tx + lean[0] * 1.4 - r * 0.15, crownY + r * 0.62, tz + lean[1] * 1.4 + r * 0.1, r * 0.4, r * 0.32, r * 0.4, rnd() * 50, 9, 5);
   };
 
   // Helper to place a Belle Époque Parisian double/triple globe streetlamp

@@ -13,6 +13,7 @@ import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
+import { GTAOPass } from 'three/examples/jsm/postprocessing/GTAOPass.js';
 import { MeshSurfaceSampler } from 'three/examples/jsm/math/MeshSurfaceSampler.js';
 import type { ViewerEntry } from './viewer-registry';
 import { findSplat } from './viewer-splat';
@@ -184,8 +185,16 @@ export async function openViewer(opts: ViewerOptions) {
   scene.add(stars);
 
   // Post-processing: bloom makes the night lighting glow.
-  const composer = new EffectComposer(renderer);
+  // Multisampled so the thin ironwork stays crisp through the post-processing chain.
+  const composer = new EffectComposer(renderer, new THREE.WebGLRenderTarget(1, 1, { samples: 4, type: THREE.HalfFloatType }));
   composer.addPass(new RenderPass(scene, camera));
+  // Ambient occlusion: darkens the places light struggles to reach (between girders, under the
+  // platforms, where trees and kerbs meet the ground), which is what gives the model depth.
+  const ao = new GTAOPass(scene, camera, 1, 1);
+  ao.blendIntensity = 0.95;
+  ao.updateGtaoMaterial({ radius: 6, distanceExponent: 1.3, thickness: 2.5, scale: 1.25, samples: 12, screenSpaceRadius: false });
+  ao.updatePdMaterial({ lumaPhi: 10, depthPhi: 2, normalPhi: 3, radius: 5, rings: 2, samples: 8 });
+  composer.addPass(ao);
   const bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.36, 0.45, 0.9);
   composer.addPass(bloom);
   composer.addPass(new OutputPass());
@@ -207,6 +216,7 @@ export async function openViewer(opts: ViewerOptions) {
   });
   scene.add(model);
   plaza.visible = usingFallback;
+  applyGroundTextures(model, renderer.capabilities.getMaxAnisotropy());
   note.textContent = usingFallback ? '임시 모델 (코드로 생성) — public/models/에 GLB 파일을 넣으면 교체됩니다' : (opts.credit ?? '');
   root.querySelector('.v-loading')!.remove();
 
@@ -279,6 +289,7 @@ export async function openViewer(opts: ViewerOptions) {
     (plaza.material as THREE.MeshStandardMaterial).color.set(night ? 0x3a3a44 : 0xb9b3a6);
     renderer.toneMappingExposure = night ? 0.95 : 0.86;
     bloom.enabled = night;
+    ao.enabled = !night; // the additive night effects (beacon, sparkles) would cast false occlusion
     stars.visible = sparkle.points.visible = beacon.visible = nightLights.visible = night;
     for (const [m, day] of mats) {
       if (night) {
@@ -490,6 +501,105 @@ function makeSparkles(model: THREE.Object3D) {
       colAttr.needsUpdate = true;
     },
   };
+}
+
+/**
+ * Paving and grass detail for the model's ground surfaces. The model file carries no texture
+ * coordinates, so they are derived here from each vertex's position on the ground plane, and the
+ * textures themselves are drawn procedurally. They only modulate the materials' own colours.
+ */
+function applyGroundTextures(model: THREE.Object3D, anisotropy: number) {
+  const rand = (() => {
+    let a = 99;
+    return () => ((a = (Math.imul(a, 1664525) + 1013904223) >>> 0) / 4294967296);
+  })();
+  const canvasTexture = (size: number, draw: (g: CanvasRenderingContext2D) => void, srgb: boolean) => {
+    const c = document.createElement('canvas');
+    c.width = c.height = size;
+    draw(c.getContext('2d')!);
+    const t = new THREE.CanvasTexture(c);
+    t.wrapS = t.wrapT = THREE.RepeatWrapping;
+    t.anisotropy = anisotropy;
+    if (srgb) t.colorSpace = THREE.SRGBColorSpace;
+    return t;
+  };
+
+  // Stone setts in a running bond: 16 x 8 stones per tile, each a slightly different shade.
+  const COLS = 8;
+  const ROWS = 16;
+  const stones: { x: number; y: number; tone: number }[] = [];
+  for (let r = 0; r < ROWS; r++) for (let c = -1; c < COLS; c++) stones.push({ x: c + (r % 2) * 0.5, y: r, tone: rand() });
+  const drawPaving = (height: boolean) => (g: CanvasRenderingContext2D) => {
+    const S = g.canvas.width;
+    const w = S / COLS;
+    const h = S / ROWS;
+    g.fillStyle = height ? '#3a3a3a' : '#8f8a80'; // joints
+    g.fillRect(0, 0, S, S);
+    for (const st of stones) {
+      const v = height ? 200 + st.tone * 55 : 205 + st.tone * 50;
+      g.fillStyle = height ? `rgb(${v},${v},${v})` : `rgb(${v},${v - 3 - st.tone * 6},${v - 10 - st.tone * 10})`;
+      g.beginPath();
+      g.roundRect(st.x * w + 1.5, st.y * h + 1.5, w - 3, h - 3, 2.5);
+      g.fill();
+    }
+    if (!height) {
+      // Weathering: faint darker and lighter patches across the stones.
+      for (let i = 0; i < 260; i++) {
+        g.fillStyle = rand() < 0.5 ? 'rgba(60,50,40,0.05)' : 'rgba(255,250,240,0.05)';
+        g.beginPath();
+        g.arc(rand() * S, rand() * S, 6 + rand() * 30, 0, Math.PI * 2);
+        g.fill();
+      }
+    }
+  };
+  const paving = canvasTexture(512, drawPaving(false), true);
+  const pavingBump = canvasTexture(512, drawPaving(true), false);
+  const PAVING_TILE = 9; // metres covered by one texture tile
+
+  // Lawn: mottled greens with soft mowing stripes.
+  const lawn = canvasTexture(
+    256,
+    (g) => {
+      const S = g.canvas.width;
+      for (let i = 0; i < 8; i++) {
+        g.fillStyle = i % 2 ? '#f2f6e6' : '#d2dcc0';
+        g.fillRect((i * S) / 8, 0, S / 8, S);
+      }
+      for (let i = 0; i < 2600; i++) {
+        const v = 170 + rand() * 85;
+        g.fillStyle = `rgba(${v},${v + 8},${v - 30},0.22)`;
+        g.fillRect(rand() * S, rand() * S, 1 + rand() * 3, 1 + rand() * 4);
+      }
+    },
+    true,
+  );
+  const LAWN_TILE = 24;
+
+  const done = new Set<THREE.Material>();
+  model.traverse((o) => {
+    const mesh = o as THREE.Mesh;
+    const mat = mesh.material as THREE.MeshStandardMaterial;
+    if (!mesh.isMesh || Array.isArray(mat)) return;
+    const isPaving = /Plaza_Stone/i.test(mat.name);
+    const isLawn = /Park_Lawn/i.test(mat.name);
+    if (!isPaving && !isLawn) return;
+    const tile = isPaving ? PAVING_TILE : LAWN_TILE;
+    const pos = mesh.geometry.getAttribute('position');
+    const uv = new Float32Array(pos.count * 2);
+    for (let i = 0; i < pos.count; i++) {
+      uv[i * 2] = pos.getX(i) / tile;
+      uv[i * 2 + 1] = pos.getZ(i) / tile;
+    }
+    mesh.geometry.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+    if (done.has(mat)) return;
+    done.add(mat);
+    mat.map = isPaving ? paving : lawn;
+    if (isPaving) {
+      mat.bumpMap = pavingBump;
+      mat.bumpScale = 0.6;
+    }
+    mat.needsUpdate = true;
+  });
 }
 
 /**
