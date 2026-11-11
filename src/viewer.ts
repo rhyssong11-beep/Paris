@@ -22,7 +22,7 @@ import { disposeObject } from './viewer-resources';
 import { QUALITY, ViewerQuality } from './viewer-quality';
 import { buildCity } from './viewer-city';
 import { buildStreets } from './viewer-streets';
-import { buildLouvreNightLights, buildLouvreSurroundings } from './viewer-louvre';
+import { applyLouvreTextures, buildLouvreNightLights, buildLouvreSurroundings } from './viewer-louvre';
 import { buildArcNightLights, buildArcSurroundings } from './viewer-arc';
 import { applyNotreDameTextures, buildNotreDameNightLights, buildNotreDameSurroundings } from './viewer-notredame';
 
@@ -258,7 +258,8 @@ async function buildViewer(opts: ViewerOptions, root: HTMLElement, signal: Abort
 
   // Ground: a soft-edged disc so the horizon fades into the sky.
   const groundMat = new THREE.MeshStandardMaterial({ color: 0x8a8577, roughness: 1, metalness: 0 });
-  const ground = new THREE.Mesh(new THREE.CircleGeometry(H * 12, 96), groundMat);
+  // The Louvre's ground leaves a hole under the main pyramid, where the paving opens onto the hall below.
+  const ground = new THREE.Mesh(site?.kind === 'louvre' ? new THREE.RingGeometry(24.5, H * 12, 96) : new THREE.CircleGeometry(H * 12, 96), groundMat);
   ground.rotation.x = -Math.PI / 2;
   ground.receiveShadow = true;
   const plaza = new THREE.Mesh(
@@ -337,13 +338,14 @@ async function buildViewer(opts: ViewerOptions, root: HTMLElement, signal: Abort
   if (signal.aborted) { disposeObject(model); signal.throwIfAborted(); }
   model.traverse((o) => {
     if ((o as THREE.Mesh).isMesh) {
-      o.castShadow = true;
+      o.castShadow = !/Pyramid_Glass/.test(o.name); // sunlight reaches the hall under the pyramid
       o.receiveShadow = true;
     }
   });
   scene.add(model);
   plaza.visible = usingFallback;
   applyGroundTextures(model, renderer.capabilities.getMaxAnisotropy());
+  if (site?.kind === 'louvre') applyLouvreTextures(model, `${base}models/louvre/`, renderer.capabilities.getMaxAnisotropy(), own);
   if (site?.kind === 'notredame') applyNotreDameTextures(model, `${base}models/notredame/`, renderer.capabilities.getMaxAnisotropy(), own);
   note.textContent = usingFallback ? '간략 모델 · 상세 모델을 불러오지 못했습니다.' : (opts.credit ?? '');
   root.querySelector('.v-loading')!.remove();
