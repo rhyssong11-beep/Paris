@@ -24,6 +24,7 @@ import { buildCity } from './viewer-city';
 import { buildStreets } from './viewer-streets';
 import { buildLouvreNightLights, buildLouvreSurroundings } from './viewer-louvre';
 import { buildArcNightLights, buildArcSurroundings } from './viewer-arc';
+import { applyNotreDameTextures, buildNotreDameNightLights, buildNotreDameSurroundings } from './viewer-notredame';
 
 const SPARKLES = 2600;
 const GOLD = new THREE.Color('#ffb347');
@@ -270,9 +271,11 @@ async function buildViewer(opts: ViewerOptions, root: HTMLElement, signal: Abort
   scene.add(ground, plaza);
   const city = site?.kind === 'arc'
     ? buildArcSurroundings(H)
-    : site
-      ? buildLouvreSurroundings(H)
-      : buildCity(H);
+    : site?.kind === 'notredame'
+      ? buildNotreDameSurroundings(H)
+      : site
+        ? buildLouvreSurroundings(H)
+        : buildCity(H);
   scene.add(city.group);
   const streets = buildStreets();
   scene.add(streets.group);
@@ -341,12 +344,14 @@ async function buildViewer(opts: ViewerOptions, root: HTMLElement, signal: Abort
   scene.add(model);
   plaza.visible = usingFallback;
   applyGroundTextures(model, renderer.capabilities.getMaxAnisotropy());
+  if (site?.kind === 'notredame') applyNotreDameTextures(model, `${base}models/notredame/`, renderer.capabilities.getMaxAnisotropy(), own);
   note.textContent = usingFallback ? '간략 모델 · 상세 모델을 불러오지 못했습니다.' : (opts.credit ?? '');
   root.querySelector('.v-loading')!.remove();
 
   // Light the surfaces from within, keeping the unlit sides of the ironwork dark.
   const nightLights = new THREE.Group();
   if (site?.kind === 'arc') nightLights.add(buildArcNightLights(H));
+  else if (site?.kind === 'notredame') nightLights.add(buildNotreDameNightLights());
   else if (site) nightLights.add(buildLouvreNightLights());
   for (const [y, width, targetY, targetWidth, intensity] of site ? [] : [
     [7, 43, 80, 24, 56000],

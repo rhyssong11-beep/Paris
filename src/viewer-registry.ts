@@ -18,7 +18,7 @@ export interface ViewerEntry {
 
 /** Everything about the viewer that differs from one landmark to the next. */
 export interface ViewerSite {
-  kind: 'louvre' | 'arc';
+  kind: 'louvre' | 'arc' | 'notredame';
   /** the model is already in metres around the origin: use it as it is instead of fitting it to `height` */
   metric: true;
   /** size of the scene in metres, which sets camera range, fog and shadow distances (the Eiffel Tower uses its height) */
@@ -74,6 +74,20 @@ export const VIEWABLE: Record<string, ViewerEntry> = {
       camera: { position: [58, 38, 112], target: [0, 21, 0] },
       detail: { x: 0, z: 0, half: 270 },
       walk: { x: 0, z: 34, lookAt: [0, 18, 0], radius: 520 },
+    },
+  },
+  'Notre-Dame': {
+    modelUrl: 'models/notredame.glb',
+    height: 96,
+    subtitle: '1163–1345 · 쌍탑 69 m · 첨탑 96 m · 2024년 복원 재개관',
+    credit: '모델·텍스처: Higgsfield 3D Jutsu / GPT Image로 제작',
+    site: {
+      kind: 'notredame',
+      metric: true,
+      span: 280,
+      camera: { position: [-178, 74, 128], target: [-6, 30, 0] },
+      detail: { x: 0, z: 0, half: 230 },
+      walk: { x: -112, z: 0, lookAt: [-64, 30, 0], radius: 520 },
     },
   },
 };

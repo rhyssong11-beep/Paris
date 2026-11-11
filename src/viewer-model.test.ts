@@ -109,3 +109,58 @@ it('decodes the shipped Arc de Triomphe model: 50 m arch, open vaults, Eternal F
     expect(w.y).toBeCloseTo(49.5, 1);
   } finally { disposeObject(scene); }
 });
+
+it('decodes the shipped Notre-Dame model: 69 m towers, 96 m spire, textured parts, and a west front you can walk up to', async () => {
+  const bytes = new Uint8Array(readFileSync(new URL('../public/models/notredame.glb', import.meta.url)));
+  const { scene } = await new GLTFLoader().setMeshoptDecoder(MeshoptDecoder).parseAsync(bytes.buffer, '');
+  try {
+    scene.updateMatrixWorld(true);
+    // Authored in metres in Higgsfield 3D Jutsu: +x is the apse, the west front stands at x = -64.
+    const bounds = new THREE.Box3().setFromObject(scene);
+    expect(bounds.max.y).toBeCloseTo(96, 0); // the rooster on the flèche
+    expect(bounds.min.y).toBeGreaterThan(-0.1);
+    expect(bounds.max.x).toBeGreaterThan(68); // gargoyles on the buttresses round the chevet
+    expect(bounds.max.x).toBeLessThan(71);
+    const hitY = (x: number, z: number) => {
+      const hits = new THREE.Raycaster(new THREE.Vector3(x, 200, z), new THREE.Vector3(0, -1, 0)).intersectObject(scene, true);
+      return hits.length ? hits[0].point.y : null;
+    };
+    expect(hitY(-56.5, 9)).toBeGreaterThan(65); // a tower terrace...
+    expect(hitY(-56.5, 9)).toBeLessThan(70);
+    expect(hitY(-56.5, 0)).toBeLessThan(33); // ...and the gap between the towers
+    expect(hitY(-20, 0)).toBeGreaterThan(43); // the ridge of the nave roof
+    expect(hitY(-20, 17)).toBeLessThan(12); // chapel roofs under the flying buttresses
+    expect(hitY(-100, 20)).toBeNull(); // open parvis
+    expect(hitY(-63.5, 13.9)).toBeGreaterThan(40); // 128 m from the west front...
+    expect(hitY(63.5, 0)).toBeGreaterThan(9); // ...to the easternmost chapel of the chevet
+    expect(hitY(15, 23)).toBeGreaterThan(30); // the south transept gable, 48 m across from the north one
+    expect(hitY(15, -23)).toBeGreaterThan(30);
+
+    for (const name of ['Stone', 'Stone_Trim', 'Stone_Sculpture', 'Roof_Lead', 'Spire_Lead', 'Copper_Verdigris', 'Portal_Tympanum_Stone', 'Portal_Door_Wood',
+      'Vitrail_Glow_RoseWest', 'Vitrail_Glow_RoseNorth', 'Vitrail_Glow_RoseSouth', 'Vitrail_Glow_Lancet']) {
+      const mesh = scene.getObjectByName(`NotreDame_${name}`) as THREE.Mesh;
+      expect(mesh, name).toBeTruthy();
+      expect(mesh.geometry.getAttribute('uv'), `${name} uv`).toBeTruthy(); // the viewer maps its image textures onto these
+    }
+    // The west rose is a 9.7 m disc centred 25 m up the front, mapped to the whole picture.
+    const rose = scene.getObjectByName('NotreDame_Vitrail_Glow_RoseWest') as THREE.Mesh;
+    const disc = new THREE.Box3().setFromObject(rose);
+    expect(disc.max.y - disc.min.y).toBeCloseTo(9.7, 0);
+    expect((disc.max.y + disc.min.y) / 2).toBeCloseTo(25, 0);
+    const uv = rose.geometry.getAttribute('uv');
+    const us = Array.from({ length: uv.count }, (_, i) => uv.getX(i));
+    const vs = Array.from({ length: uv.count }, (_, i) => uv.getY(i));
+    expect(Math.min(...us)).toBeCloseTo(0, 2);
+    expect(Math.max(...us)).toBeCloseTo(1, 2);
+    expect(Math.min(...vs)).toBeCloseTo(0, 2);
+    expect(Math.max(...vs)).toBeCloseTo(1, 2);
+
+    // Walk east across the parvis into the central portal: the doors stop you inside its deep recess.
+    const grid = buildWalkGrid([scene], 120);
+    const w = new Walker(grid);
+    w.place(-90, 1.6, -Math.PI / 2);
+    for (let t = 0; t < 6; t += 1 / 60) w.step({ forward: 1, right: 0, run: false }, 1 / 60);
+    expect(w.x).toBeGreaterThan(-66);
+    expect(w.x).toBeLessThan(-61.5);
+  } finally { disposeObject(scene); }
+});
