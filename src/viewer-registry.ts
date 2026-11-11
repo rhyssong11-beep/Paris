@@ -18,7 +18,7 @@ export interface ViewerEntry {
 
 /** Everything about the viewer that differs from one landmark to the next. */
 export interface ViewerSite {
-  kind: 'louvre';
+  kind: 'louvre' | 'arc';
   /** the model is already in metres around the origin: use it as it is instead of fitting it to `height` */
   metric: true;
   /** size of the scene in metres, which sets camera range, fog and shadow distances (the Eiffel Tower uses its height) */
@@ -61,6 +61,19 @@ export const VIEWABLE: Record<string, ViewerEntry> = {
       camera: { position: [-250, 150, 235], target: [-20, 10, 0] },
       detail: { x: -60, z: 0, half: 330 },
       walk: { x: -100, z: 0, lookAt: [0, 12, 0], radius: 620 },
+    },
+  },
+  'Arc de Triomphe': {
+    modelUrl: 'models/arc.glb',
+    height: 50,
+    subtitle: '1806–1836 · 높이 50 m · 장 샬그랭 · 샤를 드골(에투알) 광장',
+    site: {
+      kind: 'arc',
+      metric: true,
+      span: 280,
+      camera: { position: [58, 38, 112], target: [0, 21, 0] },
+      detail: { x: 0, z: 0, half: 270 },
+      walk: { x: 0, z: 34, lookAt: [0, 18, 0], radius: 520 },
     },
   },
 };

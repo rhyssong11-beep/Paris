@@ -23,6 +23,7 @@ import { QUALITY, ViewerQuality } from './viewer-quality';
 import { buildCity } from './viewer-city';
 import { buildStreets } from './viewer-streets';
 import { buildLouvreNightLights, buildLouvreSurroundings } from './viewer-louvre';
+import { buildArcNightLights, buildArcSurroundings } from './viewer-arc';
 
 const SPARKLES = 2600;
 const GOLD = new THREE.Color('#ffb347');
@@ -267,7 +268,11 @@ async function buildViewer(opts: ViewerOptions, root: HTMLElement, signal: Abort
   plaza.position.y = 0.05;
   plaza.receiveShadow = true;
   scene.add(ground, plaza);
-  const city = site ? buildLouvreSurroundings(H) : buildCity(H);
+  const city = site?.kind === 'arc'
+    ? buildArcSurroundings(H)
+    : site
+      ? buildLouvreSurroundings(H)
+      : buildCity(H);
   scene.add(city.group);
   const streets = buildStreets();
   scene.add(streets.group);
@@ -341,7 +346,8 @@ async function buildViewer(opts: ViewerOptions, root: HTMLElement, signal: Abort
 
   // Light the surfaces from within, keeping the unlit sides of the ironwork dark.
   const nightLights = new THREE.Group();
-  if (site) nightLights.add(buildLouvreNightLights());
+  if (site?.kind === 'arc') nightLights.add(buildArcNightLights(H));
+  else if (site) nightLights.add(buildLouvreNightLights());
   for (const [y, width, targetY, targetWidth, intensity] of site ? [] : [
     [7, 43, 80, 24, 56000],
     [119, 14, 250, 4, 85000],
@@ -519,7 +525,8 @@ async function buildViewer(opts: ViewerOptions, root: HTMLElement, signal: Abort
     grid: () => buildWalkGrid([model, city.group], WALK_RADIUS + 20),
     allowed: (x, z) => {
       if (Math.hypot(x, z) > WALK_RADIUS) return false; // the edge of the detailed scene
-      if ('allowed' in city) return city.allowed(x, z);
+      if ('allowed' in city && typeof city.allowed === 'function') return city.allowed(x, z);
+      if (!('river' in city)) return true;
       const { z0, z1, bridgeHalfWidth } = city.river;
       return z < z0 || z > z1 || Math.abs(x) < bridgeHalfWidth - 1; // the Seine, except on the bridge
     },
@@ -585,6 +592,7 @@ async function buildViewer(opts: ViewerOptions, root: HTMLElement, signal: Abort
     else controls.update(dt);
     quality.sample(dt);
     streets.update(dt);
+    if ('update' in city && typeof city.update === 'function') city.update(elapsed);
     const showFine = quality.level !== 'low' && (walk.active || camera.position.distanceTo(controls.target) < H * 2.7);
     for (const mesh of fineMeshes) mesh.visible = showFine;
     if (night) {
@@ -621,9 +629,11 @@ async function buildViewer(opts: ViewerOptions, root: HTMLElement, signal: Abort
       }
       controls.autoRotate = false;
       root.querySelector('[data-act=spin]')!.setAttribute('aria-pressed', 'false');
+      const streetPos = site?.kind === 'arc' ? new THREE.Vector3(0, 4.5, 58) : new THREE.Vector3(85, 42, 240);
+      const streetTarget = site?.kind === 'arc' ? new THREE.Vector3(0, 18, 0) : new THREE.Vector3(0, 2, 163);
       flight = { start: timer.getElapsed(), from: camera.position.clone(), fromTarget: controls.target.clone(),
-        to: streetView ? new THREE.Vector3(85, 42, 240) : overview.position.clone(),
-        toTarget: streetView ? new THREE.Vector3(0, 2, 163) : overview.target.clone() };
+        to: streetView ? streetPos : overview.position.clone(),
+        toTarget: streetView ? streetTarget : overview.target.clone() };
       b.setAttribute('aria-pressed', String(streetView));
     } else if (b.dataset.act === 'twinkle') {
       const elapsed = timer.getElapsed();
@@ -849,7 +859,7 @@ function applyGroundTextures(model: THREE.Object3D, anisotropy: number) {
     const mesh = o as THREE.Mesh;
     const mat = mesh.material as THREE.MeshStandardMaterial;
     if (!mesh.isMesh || Array.isArray(mat)) return;
-    const isPaving = /Plaza_Stone/i.test(mat.name);
+    const isPaving = /Plaza_(Stone|Cobble)/i.test(mat.name);
     const isLawn = /Park_Lawn/i.test(mat.name);
     const isIron = /Tower_(Iron|DarkIron|FineIron)/i.test(mat.name);
     if (!isPaving && !isLawn && !isIron) return;

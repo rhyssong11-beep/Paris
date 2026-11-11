@@ -13,8 +13,8 @@
 
 const NONE = -32768;
 const CM = 100;
-const FLOORS = 3; // floor heights kept per cell
-const SPANS = 2; // solid vertical extents kept per cell
+const FLOORS = 24; // floor heights kept per cell (enough for multi-flight switchback stairs up a monument)
+const SPANS = 6; // solid vertical extents kept per cell
 const MAX_Y = 60; // nothing above this can be reached on foot
 const SAMPLE = 0.45; // spacing of samples taken across each triangle, metres
 

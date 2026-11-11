@@ -10,6 +10,7 @@
 |---|---|
 | `eiffel` | Tour Eiffel |
 | `louvre` | Musée du Louvre (`louvre.glb`, `npm run model:louvre`로 생성. 미터 단위 그대로 사용되므로 크기 자동 맞춤 없음) |
+| `arc` | Arc de Triomphe (`arc.glb`, `npm run model:arc`로 생성. 미터 단위 그대로 사용하며 개선문·에투알 광장·12개 방사형 대로·내부 옥상 계단 포함) |
 
 ## 가우시안 스플랫 파일 조건
 

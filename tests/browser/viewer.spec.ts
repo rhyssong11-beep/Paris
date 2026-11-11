@@ -301,3 +301,41 @@ test('open the Louvre in 3D and walk in its courtyard', async ({ page }) => {
   await expect(page.locator('#viewer')).toHaveCount(0);
   expect(errors).toEqual([]);
 });
+
+test('open the Arc de Triomphe in 3D and walk beneath its central vault', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  await page.waitForFunction(() => (window as any).view?.width === window.innerWidth);
+  const point = await page.evaluate(() => {
+    const { sim, view } = (window as any);
+    const poi = sim.data.pois.find((p: any) => p.name === 'Arc de Triomphe');
+    view.cam.x = poi.x; view.cam.y = poi.y; view.cam.k = 0.5; view.invalidate();
+    const [x, y] = view.toScreen(poi.x, poi.y);
+    return { x, y: y - 6 };
+  });
+  await page.mouse.move(point.x, point.y);
+  await expect(page.locator('#tip')).toContainText('클릭해서 3D로 보기');
+  await page.mouse.click(point.x, point.y);
+  await expect(page.locator('#viewer h2')).toHaveText('Arc de Triomphe');
+  await expect(page.locator('#viewer .v-loading')).toHaveCount(0);
+  expect(await page.evaluate(() => (window as any).viewer3d.usingFallback)).toBe(false);
+  await page.locator('#viewer [data-act=night]').click();
+
+  await page.locator('#viewer [data-act=walk]').click();
+  await page.waitForFunction(() => (window as any).viewer3d.walk.active && (window as any).viewer3d.walk.walker);
+  const start = await page.evaluate(() => ({ ...(window as any).viewer3d.walk.walker }));
+  expect(start.z).toBeCloseTo(34, 0);
+  expect(start.y).toBeCloseTo(0.3, 1);
+  // Walk right through the Grand Central Vault alongside the Tomb of the Unknown Soldier.
+  const zAfter = await page.evaluate(() => {
+    const w = (window as any).viewer3d.walk.walker;
+    w.place(4.2, 20, 0);
+    for (let t = 0; t < 5; t += 1 / 60) w.step({ forward: 1, right: 0, run: false }, 1 / 60);
+    return w.z;
+  });
+  expect(zAfter).toBeLessThan(-15);
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('Escape');
+  await expect(page.locator('#viewer')).toHaveCount(0);
+  expect(errors).toEqual([]);
+});
