@@ -337,7 +337,7 @@ async function buildViewer(opts: ViewerOptions, root: HTMLElement, signal: Abort
   if (signal.aborted) { disposeObject(model); signal.throwIfAborted(); }
   model.traverse((o) => {
     if ((o as THREE.Mesh).isMesh) {
-      o.castShadow = true;
+      o.castShadow = !/Pyramid_Glass/.test(o.name); // sunlight reaches the hall under the pyramid
       o.receiveShadow = true;
     }
   });

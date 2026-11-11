@@ -143,7 +143,11 @@ const M = {
   stoneTrim: new Bucket('Arch_Stone_Trim', [0.66, 0.56, 0.4], { rough: 0.86 }),
   glass: new Bucket('Pyramid_Glass', [0.72, 0.86, 0.92], { rough: 0.05, metal: 0.1, alpha: 0.3 }),
   steel: new Bucket('Pyramid_Steel', [0.62, 0.65, 0.68], { rough: 0.35, metal: 0.85 }),
-  glow: new Bucket('Pyramid_Glow', [0.93, 0.9, 0.82], { rough: 0.6 }), // the lit hall seen through the glass
+  glow: new Bucket('Pyramid_Glow', [0.78, 0.72, 0.6], { rough: 0.5 }), // the hall's floor, lit from within at night
+  hallWall: new Bucket('Hall_Stone', [0.8, 0.72, 0.56], { rough: 0.8 }), // Burgundy limestone of the Hall Napoléon
+  hallCeiling: new Bucket('Hall_Ceiling_Stone', [0.62, 0.58, 0.5], { rough: 0.9 }),
+  hallSteel: new Bucket('Hall_Stair_Steel', [0.7, 0.72, 0.74], { rough: 0.3, metal: 0.9 }),
+  hallShade: new Bucket('Hall_Passage_Shade', [0.06, 0.055, 0.05], { rough: 0.9 }),
   granite: new Bucket('Basin_Curb', [0.3, 0.31, 0.33], { rough: 0.5 }),
   water: new Bucket('Basin_Water', [0.2, 0.36, 0.43], { rough: 0.08, metal: 0.3 }),
   paving: new Bucket('Plaza_Stone', [0.66, 0.62, 0.54], { rough: 0.92 }),
@@ -186,15 +190,25 @@ const FAR_WEST = -470; // Pavillons de Marsan and de Flore
 }
 
 // ------------------------------------------------------------------ Cour Napoléon and the pyramid
-M.paving.box(WEST - 40, 0, -COURT_HALF, EAST, GROUND, COURT_HALF);
+const HALL_OPENING = 17.1; // the paving is open under the main pyramid, over the Hall Napoléon
+M.paving.box(WEST - 40, 0, -COURT_HALF, -HALL_OPENING, GROUND, COURT_HALF);
+M.paving.box(HALL_OPENING, 0, -COURT_HALF, EAST, GROUND, COURT_HALF);
+M.paving.box(-HALL_OPENING, 0, -COURT_HALF, HALL_OPENING, GROUND, -HALL_OPENING);
+M.paving.box(-HALL_OPENING, 0, HALL_OPENING, HALL_OPENING, GROUND, COURT_HALF);
 
 /** Glass pyramid with its diamond lattice. `half` is half the base, `h` the height. */
 function pyramid(cx, cz, half, h, divisions, barSize, door = false) {
   const y = GROUND + 0.35;
   const apex = [cx, y + h, cz];
   const corners = [[-1, -1], [-1, 1], [1, 1], [1, -1]].map(([sx, sz]) => [cx + sx * half, y, cz + sz * half]);
-  M.granite.box(cx - half - 0.5, GROUND, cz - half - 0.5, cx + half + 0.5, y, cz + half + 0.5);
-  M.glow.box(cx - half + 0.6, y, cz - half + 0.6, cx + half - 0.6, y + 0.05, cz + half - 0.6);
+  if (door) { // the main pyramid stands on a kerb around the opening to the hall
+    const a = half + 0.5, b = HALL_OPENING;
+    M.granite.box(cx - a, GROUND, cz - a, cx + a, y, cz - b); M.granite.box(cx - a, GROUND, cz + b, cx + a, y, cz + a);
+    M.granite.box(cx - a, GROUND, cz - b, cx - b, y, cz + b); M.granite.box(cx + b, GROUND, cz - b, cx + a, y, cz + b);
+  } else {
+    M.granite.box(cx - half - 0.5, GROUND, cz - half - 0.5, cx + half + 0.5, y, cz + half + 0.5);
+    M.glow.box(cx - half + 0.6, y, cz - half + 0.6, cx + half - 0.6, y + 0.05, cz + half - 0.6);
+  }
   const lerp = (a, b, t) => a.map((v, i) => v + (b[i] - v) * t);
   for (let f = 0; f < 4; f++) {
     const b = corners[f];
@@ -218,6 +232,49 @@ function pyramid(cx, cz, half, h, divisions, barSize, door = false) {
   }
 }
 pyramid(0, 0, 17.7, 21.6, 18, 0.14, true);
+
+// Hall Napoléon under the main pyramid: a room wider than the opening, 9.3 m below the court, with a
+// mezzanine, the spiral stair around its open lift, escalators and the round desk. Sizes are approximate.
+{
+  const R = 27, FLOOR = -9, MEZZ = -4.6, O = HALL_OPENING, top = GROUND + 0.35;
+  M.glow.box(-R, FLOOR - 0.3, -R, R, FLOOR, R); // the floor: pale stone by day, lit from within at night
+  for (const [x0, z0, x1, z1] of [[-R, -R, R, -R + 0.4], [-R, R - 0.4, R, R], [-R, -R, -R + 0.4, R], [R - 0.4, -R, R, R]]) M.hallWall.box(x0, FLOOR, z0, x1, GROUND - 0.4, z1);
+  // ceiling between the opening and the walls, coffered underneath
+  for (const [x0, z0, x1, z1] of [[-R, -R, R, -O], [-R, O, R, R], [-R, -O, -O, O], [O, -O, R, O]]) {
+    M.hallCeiling.box(x0, GROUND - 1.1, z0, x1, GROUND - 0.4, z1);
+    for (let x = x0 + 0.5; x < x1 - 0.1; x += 3.3) M.hallCeiling.box(x, GROUND - 1.6, z0, Math.min(x + 0.5, x1), GROUND - 1.1, z1);
+    for (let z = z0 + 0.5; z < z1 - 0.1; z += 3.3) M.hallCeiling.box(x0, GROUND - 1.6, z, x1, GROUND - 1.1, Math.min(z + 0.5, z1));
+  }
+  // openings towards the three wings, and the mezzanine round three sides
+  for (const [x, z, w, d] of [[0, -R + 0.45, 9, 0.1], [0, R - 0.55, 9, 0.1], [R - 0.55, 0, 0.1, 9]]) M.hallShade.box(x - w, FLOOR, z - d, x + w, MEZZ - 0.6, z + d);
+  for (const [x0, z0, x1, z1] of [[-R, -R, R, -O - 2], [-R, O + 2, R, R], [O + 2, -O - 2, R, O + 2]]) {
+    M.hallWall.box(x0, MEZZ - 0.5, z0, x1, MEZZ, z1);
+  }
+  for (const [x0, z0, x1, z1] of [[-R, -O - 2.1, O + 2, -O - 2], [-R, O + 2, O + 2, O + 2.1], [O + 2, -O - 2, O + 2.1, O + 2]]) M.hallSteel.box(x0, MEZZ, z0, x1, MEZZ + 1.05, z1);
+  for (const x of [-18, -6, 6, 18]) for (const s of [-1, 1]) M.hallWall.cyl(x, s * (O + 2.6), 0.55, FLOOR, 0.55, MEZZ - 0.5, 10);
+  // landing inside the west door, then the spiral stair down around the lift
+  const SX = -8.5, turns = 1.25, steps = 44, r0 = 1.9, r1 = 4.6;
+  M.hallWall.box(-O, top - 0.35, -3.2, SX - r1 * 0.2, top, 3.2);
+  for (let i = 0; i < steps; i++) {
+    const a0 = Math.PI + (i / steps) * turns * 2 * Math.PI, a1 = Math.PI + ((i + 1.08) / steps) * turns * 2 * Math.PI, y = top - ((i + 1) / steps) * (top - FLOOR);
+    const p = (r, a, yy) => [SX + Math.cos(a) * r, yy, Math.sin(a) * r];
+    M.hallWall.poly([p(r0, a0, y), p(r1, a0, y), p(r1, a1, y), p(r0, a1, y)]);
+    M.hallWall.poly([p(r0, a0, y - 0.22), p(r1, a0, y - 0.22), p(r1, a1, y - 0.22), p(r0, a1, y - 0.22)]);
+    M.hallWall.poly([p(r0, a0, y), p(r1, a0, y), p(r1, a0, y - 0.22), p(r0, a0, y - 0.22)]);
+    M.hallSteel.poly([p(r1, a0, y), p(r1, a1, y), p(r1, a1, y + 1.0), p(r1, a0, y + 1.0)]); M.hallSteel.poly([p(r0, a0, y), p(r0, a1, y), p(r0, a1, y + 1.0), p(r0, a0, y + 1.0)]);
+  }
+  M.hallSteel.cyl(SX, 0, 1.45, FLOOR, 1.45, FLOOR + 4.2, 20); // the open lift on its piston
+  M.hallSteel.cyl(SX, 0, 1.6, FLOOR + 4.2, 1.6, FLOOR + 4.35, 20);
+  // escalators up to the mezzanine on the east side, and the round information desk
+  for (const s of [-1, 1]) {
+    const z = s * 12, a = [9, FLOOR, z], b = [O + 2, MEZZ, z];
+    M.hallShade.poly([[a[0], a[1] + 0.1, z - 1], [b[0], b[1] + 0.1, z - 1], [b[0], b[1] + 0.1, z + 1], [a[0], a[1] + 0.1, z + 1]]);
+    for (const q of [-1.05, 1.05]) M.hallSteel.poly([[a[0], a[1], z + q], [b[0], b[1], z + q], [b[0], b[1] + 1, z + q], [a[0], a[1] + 1, z + q]]);
+  }
+  M.hallWall.cyl(6, 0, 2.6, FLOOR, 2.6, FLOOR + 1.1, 20); M.hallShade.cyl(6, 0, 2.1, FLOOR + 1.1, 2.1, FLOOR + 1.12, 20);
+  // ground under the rest of the court's paving so nothing shows through at the edges
+  M.hallCeiling.box(-R - 0.5, FLOOR - 0.6, -R - 0.5, R + 0.5, FLOOR - 0.3, R + 0.5);
+}
 for (const [x, z] of [[0, -40], [0, 40], [44, 0]]) pyramid(x, z, 4, 4.9, 5, 0.09);
 
 // Triangular basins of dark granite around the pyramid, each brim-full of water. Pairs of them

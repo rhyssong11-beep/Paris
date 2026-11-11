@@ -11,13 +11,13 @@ export const TILE = {
 };
 /** name: [sRGB-linear colour, roughness, metalness, texture key] */
 export const PALACE_MATERIALS = {
-  Louvre_Stone: [[0.66, 0.55, 0.38], 0.92, 0, 'stone'],
-  Louvre_Stone_Trim: [[0.72, 0.61, 0.43], 0.88, 0, 'trim'],
-  Louvre_Sculpture: [[0.68, 0.57, 0.4], 0.9, 0, 'trim'],
+  Louvre_Stone: [[0.8, 0.69, 0.5], 0.92, 0, 'stone'],
+  Louvre_Stone_Trim: [[0.86, 0.75, 0.55], 0.88, 0, 'trim'],
+  Louvre_Sculpture: [[0.82, 0.71, 0.52], 0.9, 0, 'trim'],
   Palace_Window_Glass: [[0.03, 0.04, 0.055], 0.06, 0.6, null],
   Palace_Window_Frame: [[0.62, 0.6, 0.55], 0.6, 0, null],
-  Louvre_Roof_Slate: [[0.16, 0.185, 0.23], 0.5, 0.1, 'slate'],
-  Louvre_Roof_Lead: [[0.33, 0.36, 0.39], 0.5, 0.55, 'lead'],
+  Louvre_Roof_Slate: [[0.4, 0.45, 0.54], 0.5, 0.1, 'slate'],
+  Louvre_Roof_Lead: [[0.6, 0.64, 0.68], 0.5, 0.45, 'lead'],
   Louvre_Gilt: [[1.0, 0.72, 0.28], 0.3, 1, null],
   Louvre_Passage_Shade: [[0.03, 0.028, 0.026], 1, 0, null],
   Louvre_Chimney_Pot: [[0.5, 0.25, 0.16], 0.9, 0, null],
@@ -212,12 +212,15 @@ function chimneyModule() {
   F.box(-0.75, 0.75, 27, 34.2, -1.3, 1.3, M.STONE, 'ut'); F.box(-0.9, 0.9, 33.4, 33.7, -1.45, 1.45, M.TRIM, ''); F.box(-0.95, 0.95, 34.2, 34.5, -1.5, 1.5, M.TRIM, '');
   for (const q of [-0.8, 0, 0.8]) F.cyl(0, q, 0.2, 0.16, 34.5, 35.3, M.POT, 7, true);
 }
-const T1 = 30.4, T2 = 31.8;
+const T1 = 30.4, T2 = 31.8, DOME = 12.6, TOP_HALF = 3.6;
 function pavilionFrames() { const h = PAVILION_HALF; return [new Frame(-h, -h, 0, 1, -1, 0), new Frame(h, h, 0, -1, 1, 0), new Frame(h, -h, -1, 0, 0, -1), new Frame(-h, h, 1, 0, 0, 1)]; }
-function pavilionModule() {
-  const W = PAVILION_HALF * 2, widths = [8.1, 11, 8.1], T0 = L.top;
+/** `tall` adds the caryatid storey, the crowning pediments and the high dome of the main pavilions. */
+function pavilionModule(tall) {
+  const W = PAVILION_HALF * 2, widths = [8.1, 11, 8.1], T0 = L.top, base = tall ? T2 : L.top + 0.9;
   for (const F of pavilionFrames()) {
     facade(F, 0, widths, { pairs: true, passageBay: 1, rich: true });
+    const c = W / 2;
+    if (tall) {
     let s = 0;
     widths.forEach((w, i) => { // the caryatid storey
       const c = s + w / 2, half = i === 1 ? 2.1 : 1.35, sp = i === 1 ? 26.6 : 26.9;
@@ -232,15 +235,18 @@ function pavilionModule() {
     }
     balustrade(F, 0.2, W - 0.2, T0, 0.5);
     F.sweep(entab(T1, T2 - T1, 2.1), -1.1, W + 1.1, M.TRIM); dentils(F, 0, W, T1 + 0.95, 0.55, 0.26);
-    const c = W / 2; // crowning pediments
-    pediment(F, c, 11.4, T2, 4.3, false, 0.75); pediment(F, c, 6.3, T2 + 0.15, 2.9, true, 0.95);
+    pediment(F, c, 11.4, T2, 4.3, false, 0.75); // crowning pediments pediment(F, c, 6.3, T2 + 0.15, 2.9, true, 0.95);
     for (const q of [-1, 1]) { F.box(c + q * 3.4 - 0.9, c + q * 3.4 + 0.9, T2 + 0.3, T2 + 1.7, 0.3, 0.95, M.SCULPT); F.box(c + q * 8 - 1.1, c + q * 8 + 1.1, T2 + 0.2, T2 + 1.0, 0.2, 0.7, M.SCULPT); F.box(c + q * 2.9 - 0.4, c + q * 2.9 + 0.4, T2 + 1.7, T2 + 2.5, 0.3, 0.85, M.SCULPT); }
-    const y = T2 + 2.3, o = -1.9; // dormers on the dome
+    } else {
+      F.box(0, W, L.top, base, -0.5, 0.25, M.TRIM, 'bu'); // blocking course under the roof
+      pediment(F, c, 5.9, base, 2.4, false, 0.6); F.box(c - 1.6, c + 1.6, base + 0.25, base + 1.3, 0.25, 0.6, M.SCULPT);
+    }
+    const y = base + 2.3, o = -1.9; // dormers on the dome
     for (const q of [-5.6, 5.6]) { F.box(c + q - 0.9, c + q + 0.9, y - 0.6, y + 1.7, o - 2.4, o + 0.5, M.TRIM, 'bu'); pediment(F.shifted(o + 0.5), c + q, 1.0, y + 1.7, 0.6, true, 0.2); F.poly(Array.from({ length: 14 }, (_, i) => [c + q + Math.cos((i / 14) * 6.2832) * 0.55, y + 0.6 + Math.sin((i / 14) * 6.2832) * 0.55, o + 0.53]), M.GLASS); }
   }
   // the square dome
-  const R = 9, HD = 12.6, hb = PAVILION_HALF - 0.5, topH = 3.6;
-  const ring = (t) => { const k = 1 - Math.cos((t * Math.PI) / 2), y = T2 + HD * Math.sin((t * Math.PI) / 2) ** 0.92, a = hb - (hb - topH) * k; return [[-a, y, -a], [a, y, -a], [a, y, a], [-a, y, a]]; };
+  const R = tall ? 9 : 6, HD = tall ? DOME : 8.2, hb = PAVILION_HALF - 0.5, topH = tall ? TOP_HALF : 5;
+  const ring = (t) => { const k = 1 - Math.cos((t * Math.PI) / 2), y = base + HD * Math.sin((t * Math.PI) / 2) ** 0.92, a = hb - (hb - topH) * k; return [[-a, y, -a], [a, y, -a], [a, y, a], [-a, y, a]]; };
   for (let i = 0; i < R; i++) {
     const a = ring(i / R), b = ring((i + 1) / R);
     for (let k = 0; k < 4; k++) {
@@ -255,14 +261,16 @@ function pavilionModule() {
   FT.box(-0.3, 2 * topH + 0.3, yT, yT + 0.35, -2 * topH - 0.3, 0.3, M.LEAD, 'u');
   for (let i = 0; i <= 10; i++) { const s = (i / 10) * 2 * topH; for (const [a, b] of [[s, 0], [s, -2 * topH], [0, -s], [2 * topH, -s]]) FT.box(a - 0.05, a + 0.05, yT + 0.35, yT + 1.5, b - 0.05, b + 0.05, M.LEAD, 'tu'); }
   for (const y of [yT + 0.9, yT + 1.5]) { FT.box(0, 2 * topH, y, y + 0.07, -0.04, 0.04, M.LEAD, 'lr'); FT.box(0, 2 * topH, y, y + 0.07, -2 * topH - 0.04, -2 * topH + 0.04, M.LEAD, 'lr'); FT.box(-0.04, 0.04, y, y + 0.07, -2 * topH, 0, M.LEAD, ''); FT.box(2 * topH - 0.04, 2 * topH + 0.04, y, y + 0.07, -2 * topH, 0, M.LEAD, ''); }
-  FT.cyl(topH, -topH, 0.7, 0.45, yT + 0.35, yT + 1.6, M.LEAD, 8, true); FT.cyl(topH, -topH, 0.09, 0.06, yT + 1.6, yT + 11.5, M.IRON, 6, true);
-  [M.FB, M.FW, M.FR].forEach((m, i) => FT.box(topH + 0.08 + i * 1.0, topH + 1.08 + i * 1.0, yT + 9.3, yT + 11.3, -topH - 0.015, -topH + 0.015, m, ''));
+  FT.cyl(topH, -topH, 0.7, 0.45, yT + 0.35, yT + 1.6, M.LEAD, 8, true);
 }
 function clockModule() {
   const F = pavilionFrames()[0], c = PAVILION_HALF, y = T2 + 1.45;
   const disc = (r, o, m) => F.poly(Array.from({ length: 24 }, (_, i) => [c + Math.cos((i / 24) * 6.2832) * r, y + Math.sin((i / 24) * 6.2832) * r, o]), m);
   disc(1.28, 1.0, M.GILT); disc(1.08, 1.03, M.DARK); disc(0.16, 1.06, M.GILT);
   F.box(c - 0.03, c + 0.03, y, y + 0.9, 1.04, 1.07, M.GILT); F.box(c, c + 0.62, y - 0.03, y + 0.03, 1.04, 1.07, M.GILT);
+  const yT = T2 + DOME, G = new Frame(0, 0, 1, 0, 0, 1); // the flag over the dome
+  G.cyl(0, 0, 0.09, 0.06, yT + 1.6, yT + 11.5, M.IRON, 6, true);
+  [M.FB, M.FW, M.FR].forEach((m, i) => G.box(0.08 + i * 1.0, 1.08 + i * 1.0, yT + 9.3, yT + 11.3, -0.015, 0.015, m, ''));
 }
 
 /**
@@ -272,7 +280,7 @@ function clockModule() {
 export function buildPalace() {
   const modules = {};
   const make = (name, fn) => { cur = { P: [], N: [], UV: [], MID: [] }; fn(); modules[name] = cur; };
-  make('Bay_A', () => bayModule(0)); make('Bay_B', () => bayModule(1)); make('Chimney', chimneyModule); make('Pavilion', pavilionModule); make('Clock', clockModule);
+  make('Bay_A', () => bayModule(0)); make('Bay_B', () => bayModule(1)); make('Chimney', chimneyModule); make('Pavilion', () => pavilionModule(true)); make('Pavilion_Low', () => pavilionModule(false)); make('Clock', clockModule);
   const placements = [];
   /** A row of bays from (ax, az) to (bx, bz); the wall faces to the left of that direction... see above. */
   const row = (ax, az, bx, bz) => {
@@ -284,8 +292,8 @@ export function buildPalace() {
   const wing = (x0, z0, x1, z1) => {
     if (x1 - x0 >= z1 - z0) { row(x0, z1, x1, z1); row(x1, z0, x0, z0); } else { row(x0, z0, x0, z1); row(x1, z1, x1, z0); }
   };
-  const pavilion = (x, z, scale = 1, clock = false) => {
-    placements.push({ module: 'Pavilion', x, z, dx: 1, dz: 0, sx: scale, sz: scale });
+  const pavilion = (x, z, scale = 1, tall = true, clock = false) => {
+    placements.push({ module: tall ? 'Pavilion' : 'Pavilion_Low', x, z, dx: 1, dz: 0, sx: scale, sz: scale });
     if (clock) placements.push({ module: 'Clock', x, z, dx: 1, dz: 0, sx: scale, sz: scale });
   };
   const D = 22;
@@ -296,12 +304,12 @@ export function buildPalace() {
     for (const x of [-112, -52, 28, 90]) wing(x, lo(84, 106), x + D, hi(84, 106)); // cross ranges of the inner courts
     wing(112, lo(86, 106), 134, hi(86, 106)); // link to the Cour Carrée
     wing(112, lo(64, 86), 284, hi(64, 86)); // Cour Carrée, north and south ranges
-    pavilion(-105, s * 73); pavilion(0, s * 73); pavilion(70, s * 73); // Turgot, Richelieu, Colbert / Mollien, Denon, Daru
-    pavilion(-454, s * 117, 1.12); pavilion(-300, s * 117); pavilion(-120, s * 117); pavilion(123, s * 117, 0.92); // Marsan / Flore and the gallery pavilions
-    pavilion(198, s * 75); pavilion(123, s * 75, 0.92); pavilion(273, s * 75, 0.92); // Cour Carrée: centres and corners
+    pavilion(-105, s * 73, 1, false); pavilion(0, s * 73); pavilion(70, s * 73, 1, false); // Turgot, Richelieu, Colbert / Mollien, Denon, Daru
+    pavilion(-454, s * 117, 1.12); pavilion(-300, s * 117, 1, false); pavilion(-120, s * 117, 1, false); pavilion(123, s * 117, 0.92, false); // Marsan / Flore and the gallery pavilions
+    pavilion(198, s * 75); pavilion(123, s * 75, 0.92, false); pavilion(273, s * 75, 0.92, false); // Cour Carrée: centres and corners
   }
   wing(112, -64, 134, 64); wing(262, -64, 284, 64); // Cour Carrée, west (Sully) and east (Colonnade) ranges
-  pavilion(123, 0, 1, true); pavilion(273, 0); // Pavillon de l'Horloge, and the centre of the east front
+  pavilion(123, 0, 1, true, true); pavilion(273, 0); // Pavillon de l'Horloge, and the centre of the east front
   return { modules, placements, names: NAMES };
 }
 

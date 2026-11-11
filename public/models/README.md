@@ -66,6 +66,6 @@
 ## 루브르 모델과 텍스처
 
 - 모델은 약 **1.3 MB**입니다. 저장된 삼각형은 약 9만 개이고, 모듈을 반복해 그리는 삼각형은 약 187만 개입니다.
-- 궁전은 `scripts/louvre/palace.mjs`가 만드는 모듈 다섯 개(`Palace_Bay_A`, `Palace_Bay_B`, `Palace_Chimney`, `Palace_Pavilion`, `Palace_Clock`)로 이루어집니다. 외벽 한 칸에는 3층 창과 창살, 기둥, 코니스, 난간, 맨사드 지붕 절반, 도머 창이 들어 있습니다.
+- 궁전은 `scripts/louvre/palace.mjs`가 만드는 모듈 여섯 개(`Palace_Bay_A`, `Palace_Bay_B`, `Palace_Chimney`, `Palace_Pavilion`, `Palace_Pavilion_Low`, `Palace_Clock`)로 이루어집니다. 외벽 한 칸에는 3층 창과 창살, 기둥, 코니스, 난간, 맨사드 지붕 절반, 도머 창이 들어 있습니다.
 - `louvre/` 폴더의 텍스처(`stone.png`, `trim.png`, `slate.png`, `lead.png`)는 `scripts/louvre/textures.mjs`가 코드로 만든 것입니다. 이어 붙일 수 있는 무늬이고, 모델의 UV는 몇 미터 단위로 반복됩니다.
-- 실제 궁전의 축은 조금 틀어져 있지만 모델은 동서 축에 맞춰 직각으로 배치했습니다. 파빌리옹은 모두 같은 모듈이고, 조각은 덩어리로 줄였습니다.
+- 실제 궁전의 축은 조금 틀어져 있지만 모델은 동서 축에 맞춰 직각으로 배치했습니다. 파빌리옹은 높은 돔과 낮은 지붕 두 가지 모듈을 돌려 쓰고, 조각은 덩어리로 줄였습니다.

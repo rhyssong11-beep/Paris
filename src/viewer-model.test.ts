@@ -65,7 +65,8 @@ it('decodes the shipped Louvre model: pyramid at the origin, open courtyard, pal
       expect(mesh.geometry.getAttribute('uv'), o.name).toBeTruthy(); // the viewer's masonry textures need them
     });
     expect(instances.Palace_Bay_A + instances.Palace_Bay_B).toBeGreaterThan(700);
-    expect(instances.Palace_Pavilion).toBe(22);
+    expect(instances.Palace_Pavilion).toBe(8); // the main pavilions, with the high dome
+    expect(instances.Palace_Pavilion_Low).toBe(14);
     expect(instances.Palace_Clock).toBe(1);
     for (const name of ['Louvre_Stone', 'Louvre_Stone_Trim', 'Louvre_Roof_Slate', 'Louvre_Roof_Lead', 'Palace_Window_Glass']) expect(materials.has(name), name).toBe(true);
   } finally { disposeObject(scene); }
