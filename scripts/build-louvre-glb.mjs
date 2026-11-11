@@ -145,10 +145,10 @@ const M = {
   courtGlass: new Bucket('Court_Roof_Glass', [0.62, 0.76, 0.82], { rough: 0.08, metal: 0.1, alpha: 0.5 }),
   glass: new Bucket('Pyramid_Glass', [0.72, 0.86, 0.92], { rough: 0.05, metal: 0.1, alpha: 0.3 }),
   steel: new Bucket('Pyramid_Steel', [0.62, 0.65, 0.68], { rough: 0.35, metal: 0.85 }),
-  glow: new Bucket('Pyramid_Glow', [0.78, 0.72, 0.6], { rough: 0.5 }), // the hall's floor, lit from within at night
-  hallWall: new Bucket('Hall_Stone', [0.8, 0.72, 0.56], { rough: 0.8 }), // Burgundy limestone of the Hall Napoléon
-  hallCeiling: new Bucket('Hall_Ceiling_Stone', [0.62, 0.58, 0.5], { rough: 0.9 }),
-  hallSteel: new Bucket('Hall_Stair_Steel', [0.7, 0.72, 0.74], { rough: 0.3, metal: 0.9 }),
+  glow: new Bucket('Pyramid_Glow', [0.42, 0.37, 0.29], { rough: 0.6 }), // the hall's floor, lit from within at night
+  hallWall: new Bucket('Hall_Stone', [0.56, 0.49, 0.37], { rough: 0.85 }), // Burgundy limestone of the Hall Napoléon
+  hallCeiling: new Bucket('Hall_Ceiling_Stone', [0.4, 0.37, 0.31], { rough: 0.9 }),
+  hallSteel: new Bucket('Hall_Stair_Steel', [0.34, 0.36, 0.38], { rough: 0.45, metal: 0.6 }),
   hallShade: new Bucket('Hall_Passage_Shade', [0.06, 0.055, 0.05], { rough: 0.9 }),
   granite: new Bucket('Basin_Curb', [0.3, 0.31, 0.33], { rough: 0.5 }),
   water: new Bucket('Basin_Water', [0.2, 0.36, 0.43], { rough: 0.08, metal: 0.3 }),
