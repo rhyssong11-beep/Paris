@@ -3,7 +3,8 @@
 //
 // Every module is modelled in metres in its own frame: s runs along the wall (+x), y is up, and o is
 // the distance out from the wall plane (+z). The layout then places the modules around the courts.
-// Winding is not kept consistent, so the materials are double-sided.
+// Normals face outwards (shadow biasing needs that), but the winding is not kept consistent, so the
+// materials are double-sided.
 
 /** Metres covered by one repeat of each material's texture, across and up. */
 export const TILE = {
@@ -16,8 +17,8 @@ export const PALACE_MATERIALS = {
   Louvre_Sculpture: [[0.82, 0.71, 0.52], 0.9, 0, 'trim'],
   Palace_Window_Glass: [[0.03, 0.04, 0.055], 0.06, 0.6, null],
   Palace_Window_Frame: [[0.62, 0.6, 0.55], 0.6, 0, null],
-  Louvre_Roof_Slate: [[0.4, 0.45, 0.54], 0.5, 0.1, 'slate'],
-  Louvre_Roof_Lead: [[0.6, 0.64, 0.68], 0.5, 0.45, 'lead'],
+  Louvre_Roof_Slate: [[0.44, 0.48, 0.55], 0.62, 0, 'slate'],
+  Louvre_Roof_Lead: [[0.62, 0.65, 0.68], 0.5, 0.3, 'lead'],
   Louvre_Gilt: [[1.0, 0.72, 0.28], 0.3, 1, null],
   Louvre_Passage_Shade: [[0.03, 0.028, 0.026], 1, 0, null],
   Louvre_Chimney_Pot: [[0.5, 0.25, 0.16], 0.9, 0, null],
@@ -32,37 +33,48 @@ const M = { STONE: 0, TRIM: 1, SCULPT: 2, GLASS: 3, FRAME: 4, SLATE: 5, LEAD: 6,
 let cur;
 const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
 const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
-function tri(a, b, c, m, na, nb, nc) {
+/** `dir` is the way a flat triangle should face; smooth ones give their own normals instead. */
+function tri(a, b, c, m, na, nb, nc, dir) {
   let g = cross(sub(b, a), sub(c, a));
   const l = Math.hypot(...g);
   if (l < 1e-10) return;
   g = g.map((v) => v / l);
-  if (na && g[0] * na[0] + g[1] * na[1] + g[2] * na[2] < 0) { [b, c] = [c, b]; [nb, nc] = [nc, nb]; }
+  const want = na ?? dir;
+  if (want && g[0] * want[0] + g[1] * want[1] + g[2] * want[2] < 0) { [b, c] = [c, b]; [nb, nc] = [nc, nb]; g = g.map((v) => -v); }
   const [tu, tv] = TILE[NAMES[m]] ?? [4, 4];
   const uv = (p) => (Math.abs(g[1]) > 0.75 ? [p[0] / tu, p[2] / tv] : Math.abs(g[0]) > Math.abs(g[2]) ? [p[2] / tu, p[1] / tv] : [p[0] / tu, p[1] / tv]);
   cur.P.push(...a, ...b, ...c); cur.N.push(...(na ?? g), ...(nb ?? g), ...(nc ?? g)); cur.UV.push(...uv(a), ...uv(b), ...uv(c)); cur.MID.push(m);
 }
-const quad = (a, b, c, d, m) => { tri(a, b, c, m); tri(a, c, d, m); };
+const quad = (a, b, c, d, m, dir) => { tri(a, b, c, m, undefined, undefined, undefined, dir); tri(a, c, d, m, undefined, undefined, undefined, dir); };
+/** Quad facing away from the point `from`. */
+const quadAway = (a, b, c, d, m, from) => quad(a, b, c, d, m, [(a[0] + c[0]) / 2 - from[0], (a[1] + c[1]) / 2 - from[1], (a[2] + c[2]) / 2 - from[2]]);
 
 class Frame {
   constructor(ox, oz, sx, sz, nx, nz) { Object.assign(this, { ox, oz, sx, sz, nx, nz }); }
   p(s, y, o) { return [this.ox + this.sx * s + this.nx * o, y, this.oz + this.sz * s + this.nz * o]; }
   shifted(o) { return new Frame(this.ox + this.nx * o, this.oz + this.nz * o, this.sx, this.sz, this.nx, this.nz); }
-  rect(s0, s1, y0, y1, o, m) { if (s1 - s0 > 1e-6 && y1 - y0 > 1e-6) quad(this.p(s0, y0, o), this.p(s1, y0, o), this.p(s1, y1, o), this.p(s0, y1, o), m); }
+  /** Direction in world space of a vector given along the wall, up, and out. */
+  vec(ds, dy, dO) { return [this.sx * ds + this.nx * dO, dy, this.sz * ds + this.nz * dO]; }
+  rect(s0, s1, y0, y1, o, m) { if (s1 - s0 > 1e-6 && y1 - y0 > 1e-6) quad(this.p(s0, y0, o), this.p(s1, y0, o), this.p(s1, y1, o), this.p(s0, y1, o), m, this.vec(0, 0, 1)); }
   /** Box; `skip` lists faces to leave out: b(ack) f(ront) l r t(op) u(nder). */
   box(s0, s1, y0, y1, o0, o1, m, skip = 'b') {
     const c = (s, y, o) => this.p(s, y, o);
-    if (!skip.includes('f')) quad(c(s0, y0, o1), c(s1, y0, o1), c(s1, y1, o1), c(s0, y1, o1), m);
-    if (!skip.includes('b')) quad(c(s0, y0, o0), c(s1, y0, o0), c(s1, y1, o0), c(s0, y1, o0), m);
-    if (!skip.includes('l')) quad(c(s0, y0, o0), c(s0, y0, o1), c(s0, y1, o1), c(s0, y1, o0), m);
-    if (!skip.includes('r')) quad(c(s1, y0, o0), c(s1, y0, o1), c(s1, y1, o1), c(s1, y1, o0), m);
-    if (!skip.includes('t')) quad(c(s0, y1, o0), c(s1, y1, o0), c(s1, y1, o1), c(s0, y1, o1), m);
-    if (!skip.includes('u')) quad(c(s0, y0, o0), c(s1, y0, o0), c(s1, y0, o1), c(s0, y0, o1), m);
+    if (!skip.includes('f')) quad(c(s0, y0, o1), c(s1, y0, o1), c(s1, y1, o1), c(s0, y1, o1), m, this.vec(0, 0, 1));
+    if (!skip.includes('b')) quad(c(s0, y0, o0), c(s1, y0, o0), c(s1, y1, o0), c(s0, y1, o0), m, this.vec(0, 0, -1));
+    if (!skip.includes('l')) quad(c(s0, y0, o0), c(s0, y0, o1), c(s0, y1, o1), c(s0, y1, o0), m, this.vec(-1, 0, 0));
+    if (!skip.includes('r')) quad(c(s1, y0, o0), c(s1, y0, o1), c(s1, y1, o1), c(s1, y1, o0), m, this.vec(1, 0, 0));
+    if (!skip.includes('t')) quad(c(s0, y1, o0), c(s1, y1, o0), c(s1, y1, o1), c(s0, y1, o1), m, [0, 1, 0]);
+    if (!skip.includes('u')) quad(c(s0, y0, o0), c(s1, y0, o0), c(s1, y0, o1), c(s0, y0, o1), m, [0, -1, 0]);
   }
   /** Moulding: a profile of [o, y] points swept along s. */
   sweep(prof, s0, s1, m, caps = true) {
-    for (let i = 0; i + 1 < prof.length; i++) quad(this.p(s0, prof[i][1], prof[i][0]), this.p(s1, prof[i][1], prof[i][0]), this.p(s1, prof[i + 1][1], prof[i + 1][0]), this.p(s0, prof[i + 1][1], prof[i + 1][0]), m);
-    if (caps) for (const s of [s0, s1]) for (let i = 1; i + 1 < prof.length; i++) tri(this.p(s, prof[0][1], prof[0][0]), this.p(s, prof[i][1], prof[i][0]), this.p(s, prof[i + 1][1], prof[i + 1][0]), m);
+    const co = prof.reduce((n, q) => n + q[0], 0) / prof.length, cy = prof.reduce((n, q) => n + q[1], 0) / prof.length;
+    for (let i = 0; i + 1 < prof.length; i++) {
+      let no = prof[i + 1][1] - prof[i][1], ny = -(prof[i + 1][0] - prof[i][0]); // across the segment, turned away from the profile's middle
+      if (no * ((prof[i][0] + prof[i + 1][0]) / 2 - co) + ny * ((prof[i][1] + prof[i + 1][1]) / 2 - cy) < 0) { no = -no; ny = -ny; }
+      quad(this.p(s0, prof[i][1], prof[i][0]), this.p(s1, prof[i][1], prof[i][0]), this.p(s1, prof[i + 1][1], prof[i + 1][0]), this.p(s0, prof[i + 1][1], prof[i + 1][0]), m, this.vec(0, ny, no));
+    }
+    if (caps) for (const s of [s0, s1]) for (let i = 1; i + 1 < prof.length; i++) tri(this.p(s, prof[0][1], prof[0][0]), this.p(s, prof[i][1], prof[i][0]), this.p(s, prof[i + 1][1], prof[i + 1][0]), m, undefined, undefined, undefined, this.vec(s === s0 ? -1 : 1, 0, 0));
   }
   /** Upright round shaft with smooth normals; r0 at y0, r1 at y1. */
   cyl(s, o, r0, r1, y0, y1, m, seg = 10, cap = false) {
@@ -73,25 +85,43 @@ class Frame {
       const a0 = this.p(s + c0 * r0, y0, o + s0 * r0), a1 = this.p(s + c1 * r0, y0, o + s1 * r0), b0 = this.p(s + c0 * r1, y1, o + s0 * r1), b1 = this.p(s + c1 * r1, y1, o + s1 * r1);
       tri(a0, a1, b1, m, n0, n1, n1); tri(a0, b1, b0, m, n0, n1, n0);
     }
-    if (cap) for (let i = 1; i + 1 < seg; i++) tri(this.p(s + r1, y1, o), this.p(s + pts[i][0] * r1, y1, o + pts[i][1] * r1), this.p(s + pts[i + 1][0] * r1, y1, o + pts[i + 1][1] * r1), m);
+    if (cap) for (let i = 1; i + 1 < seg; i++) tri(this.p(s + r1, y1, o), this.p(s + pts[i][0] * r1, y1, o + pts[i][1] * r1), this.p(s + pts[i + 1][0] * r1, y1, o + pts[i + 1][1] * r1), m, undefined, undefined, undefined, [0, 1, 0]);
   }
-  poly(pts, m) { const q = pts.map((p) => this.p(...p)); for (let i = 1; i + 1 < q.length; i++) tri(q[0], q[i], q[i + 1], m); }
+  /**
+   * Flat polygon. It faces out from the wall, or up if it is level, unless `hint` says otherwise:
+   * { toward: [s, y, o] }, { away: [s, y, o] } or { dir: [ds, dy, do] }.
+   */
+  poly(pts, m, hint) {
+    const q = pts.map((p) => this.p(...p));
+    let dir;
+    if (hint?.dir) dir = this.vec(...hint.dir);
+    else if (hint) {
+      const c = q.reduce((n, v) => [n[0] + v[0] / q.length, n[1] + v[1] / q.length, n[2] + v[2] / q.length], [0, 0, 0]), t = this.p(...(hint.toward ?? hint.away)), k = hint.toward ? 1 : -1;
+      dir = [(t[0] - c[0]) * k, (t[1] - c[1]) * k, (t[2] - c[2]) * k];
+    } else {
+      let g = [0, 0, 0];
+      for (let i = 1; i + 1 < q.length && Math.hypot(...g) < 1e-9; i++) g = cross(sub(q[i], q[0]), sub(q[i + 1], q[0]));
+      const l = Math.hypot(...g) || 1, out = this.vec(0, 0, 1), go = (g[0] * out[0] + g[2] * out[2]) / l;
+      dir = Math.abs(go) > 0.3 ? out : Math.abs(g[1] / l) > 0.3 ? [0, 1, 0] : undefined;
+    }
+    for (let i = 1; i + 1 < q.length; i++) tri(q[0], q[i], q[i + 1], m, undefined, undefined, undefined, dir);
+  }
 }
 
 const ARC = 10;
 /** One bay of wall between s0..s1 and yb..yt with a recessed window, door or passage. */
 function wallBay(F, s0, s1, yb, yt, op) {
   const { c, half, sill, top, arched = false, depth = 0.55, passage = false } = op;
-  const a = c - half, b = c + half, d = -depth;
+  const a = c - half, b = c + half, d = -depth, inward = { toward: [c, (sill + top) / 2, d / 2] }; // the reveals face into the opening
   F.rect(s0, a, yb, yt, 0, M.STONE); F.rect(b, s1, yb, yt, 0, M.STONE); F.rect(a, b, yb, sill, 0, M.STONE);
   const arc = Array.from({ length: ARC + 1 }, (_, i) => { const t = Math.PI - (i / ARC) * Math.PI; return [c + Math.cos(t) * half, top + Math.sin(t) * half]; });
   if (arched) {
     for (let i = 0; i < ARC; i++) {
       F.poly([[arc[i][0], arc[i][1], 0], [arc[i + 1][0], arc[i + 1][1], 0], [arc[i + 1][0], yt, 0], [arc[i][0], yt, 0]], M.STONE);
-      F.poly([[arc[i][0], arc[i][1], 0], [arc[i + 1][0], arc[i + 1][1], 0], [arc[i + 1][0], arc[i + 1][1], d], [arc[i][0], arc[i][1], d]], M.STONE);
+      F.poly([[arc[i][0], arc[i][1], 0], [arc[i + 1][0], arc[i + 1][1], 0], [arc[i + 1][0], arc[i + 1][1], d], [arc[i][0], arc[i][1], d]], M.STONE, inward);
     }
-  } else { F.rect(a, b, top, yt, 0, M.STONE); F.poly([[a, top, 0], [b, top, 0], [b, top, d], [a, top, d]], M.STONE); }
-  F.poly([[a, sill, 0], [a, top, 0], [a, top, d], [a, sill, d]], M.STONE); F.poly([[b, sill, 0], [b, top, 0], [b, top, d], [b, sill, d]], M.STONE);
+  } else { F.rect(a, b, top, yt, 0, M.STONE); F.poly([[a, top, 0], [b, top, 0], [b, top, d], [a, top, d]], M.STONE, inward); }
+  F.poly([[a, sill, 0], [a, top, 0], [a, top, d], [a, sill, d]], M.STONE, inward); F.poly([[b, sill, 0], [b, top, 0], [b, top, d], [b, sill, d]], M.STONE, inward);
   F.poly([[a, sill, 0], [b, sill, 0], [b, sill, d], [a, sill, d]], M.TRIM);
   const fill = passage ? M.DARK : M.GLASS;
   F.rect(a, b, sill, top, d, fill);
@@ -111,7 +141,7 @@ function archivolt(F, c, half, spring, wide = 0.38, out = 0.13) {
   for (let i = 0; i < ARC; i++) {
     const [a0, a1, b0, b1] = [pt(half, i), pt(half, i + 1), pt(half + wide, i), pt(half + wide, i + 1)];
     F.poly([[...a0, out], [...a1, out], [...b1, out], [...b0, out]], M.TRIM);
-    F.poly([[...b0, 0], [...b1, 0], [...b1, out], [...b0, out]], M.TRIM); F.poly([[...a0, 0], [...a1, 0], [...a1, out], [...a0, out]], M.TRIM);
+    F.poly([[...b0, 0], [...b1, 0], [...b1, out], [...b0, out]], M.TRIM, { away: [c, spring, out / 2] }); F.poly([[...a0, 0], [...a1, 0], [...a1, out], [...a0, out]], M.TRIM, { toward: [c, spring, out / 2] });
   }
   F.box(c - 0.24, c + 0.24, spring + half - 0.08, spring + half + wide + 0.28, 0, out + 0.14, M.SCULPT);
   for (const s of [c - half - wide, c + half]) F.box(s, s + wide, spring - 0.32, spring, 0, out + 0.05, M.TRIM);
@@ -125,7 +155,7 @@ function pediment(F, c, half, y, h, curved, out = 0.32) {
     F.poly([[a[0], y, out * 0.45], [b[0], y, out * 0.45], [b[0], b[1], out * 0.45], [a[0], a[1], out * 0.45]], M.SCULPT);
     F.poly([[a[0], a[1], 0], [b[0], b[1], 0], [b[0], b[1], out], [a[0], a[1], out]], M.TRIM);
     F.poly([[a[0], a[1], out], [b[0], b[1], out], [b[0], b[1] - r, out], [a[0], a[1] - r, out]], M.TRIM);
-    F.poly([[a[0], a[1] - r, out], [b[0], b[1] - r, out], [b[0], b[1] - r, out * 0.45], [a[0], a[1] - r, out * 0.45]], M.TRIM);
+    F.poly([[a[0], a[1] - r, out], [b[0], b[1] - r, out], [b[0], b[1] - r, out * 0.45], [a[0], a[1] - r, out * 0.45]], M.TRIM, { dir: [0, -1, 0] });
   }
   F.box(c - half - 0.08, c + half + 0.08, y - 0.14, y, 0, out, M.TRIM);
 }
@@ -250,13 +280,14 @@ function pavilionModule(tall) {
   for (let i = 0; i < R; i++) {
     const a = ring(i / R), b = ring((i + 1) / R);
     for (let k = 0; k < 4; k++) {
-      quad(a[k], a[(k + 1) % 4], b[(k + 1) % 4], b[k], M.SLATE);
+      const axis = [0, (a[k][1] + b[k][1]) / 2 - 3, 0];
+      quadAway(a[k], a[(k + 1) % 4], b[(k + 1) % 4], b[k], M.SLATE, axis);
       const p = a[k], q = b[k], r = 0.24;
-      quad([p[0] - r, p[1], p[2]], [p[0] + r, p[1], p[2]], [q[0] + r, q[1] + 0.12, q[2]], [q[0] - r, q[1] + 0.12, q[2]], M.LEAD); quad([p[0], p[1], p[2] - r], [p[0], p[1], p[2] + r], [q[0], q[1] + 0.12, q[2] + r], [q[0], q[1] + 0.12, q[2] - r], M.LEAD);
+      quadAway([p[0] - r, p[1], p[2]], [p[0] + r, p[1], p[2]], [q[0] + r, q[1] + 0.12, q[2]], [q[0] - r, q[1] + 0.12, q[2]], M.LEAD, axis); quadAway([p[0], p[1], p[2] - r], [p[0], p[1], p[2] + r], [q[0], q[1] + 0.12, q[2] + r], [q[0], q[1] + 0.12, q[2] - r], M.LEAD, axis);
     }
   }
   const top = ring(1), yT = top[0][1];
-  quad(top[0], top[1], top[2], top[3], M.LEAD);
+  quad(top[0], top[1], top[2], top[3], M.LEAD, [0, 1, 0]);
   const FT = new Frame(-topH, topH, 1, 0, 0, 1);
   FT.box(-0.3, 2 * topH + 0.3, yT, yT + 0.35, -2 * topH - 0.3, 0.3, M.LEAD, 'u');
   for (let i = 0; i <= 10; i++) { const s = (i / 10) * 2 * topH; for (const [a, b] of [[s, 0], [s, -2 * topH], [0, -s], [2 * topH, -s]]) FT.box(a - 0.05, a + 0.05, yT + 0.35, yT + 1.5, b - 0.05, b + 0.05, M.LEAD, 'tu'); }

@@ -18,6 +18,7 @@ import { meshopt, weld } from '@gltf-transform/functions';
 import { MeshoptEncoder } from 'meshoptimizer';
 import { buildPalace, expandPalace, PALACE_MATERIALS } from './louvre/palace.mjs';
 import { encodePng, makeTextures } from './louvre/textures.mjs';
+import { bakeOcclusion, buildBvh } from './louvre/bvh.mjs';
 
 // ------------------------------------------------------------------ mesh building
 
@@ -141,6 +142,7 @@ const rnd = () => ((seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0) / 4294
 const M = {
   stone: new Bucket('Arch_Stone', [0.6, 0.5, 0.35], { rough: 0.9 }), // the Carrousel arch's limestone
   stoneTrim: new Bucket('Arch_Stone_Trim', [0.66, 0.56, 0.4], { rough: 0.86 }),
+  courtGlass: new Bucket('Court_Roof_Glass', [0.62, 0.76, 0.82], { rough: 0.08, metal: 0.1, alpha: 0.5 }),
   glass: new Bucket('Pyramid_Glass', [0.72, 0.86, 0.92], { rough: 0.05, metal: 0.1, alpha: 0.3 }),
   steel: new Bucket('Pyramid_Steel', [0.62, 0.65, 0.68], { rough: 0.35, metal: 0.85 }),
   glow: new Bucket('Pyramid_Glow', [0.78, 0.72, 0.6], { rough: 0.5 }), // the hall's floor, lit from within at night
@@ -397,6 +399,22 @@ for (const s of [-1, 1]) {
   M.gravel.box(WEST + 16, 0, Math.min(za, zb), EAST, GROUND - 0.05, Math.max(za, zb));
 }
 
+// Glazed roofs over the inner courts between the court wings and the long outer ranges. The Richelieu
+// side's courts are roofed like this; on the Denon side it stands in for courts that are partly open.
+for (const s of [-1, 1]) {
+  for (const [xa, xb] of [[-90, -52], [-30, 28], [50, 90]]) {
+    const za = s * (COURT_HALF + DEPTH), zb = s * (OUTER - DEPTH), zc = (za + zb) / 2, eave = GROUND + 24.3, ridge = GROUND + 28.2;
+    for (const z of [za, zb]) {
+      M.courtGlass.poly([[xa, eave, z], [xb, eave, z], [xb, ridge, zc], [xa, ridge, zc]]);
+      M.steel.bar([xa, eave, z], [xb, eave, z], 0.3);
+      for (let x = xa; x <= xb + 0.01; x += (xb - xa) / Math.round((xb - xa) / 3.2)) M.steel.bar([x, eave, z], [x, ridge, zc], 0.16);
+      for (const f of [1 / 3, 2 / 3]) M.steel.bar([xa, eave + (ridge - eave) * f, z + (zc - z) * f], [xb, eave + (ridge - eave) * f, z + (zc - z) * f], 0.1);
+    }
+    M.steel.bar([xa, ridge, zc], [xb, ridge, zc], 0.3);
+    for (const x of [xa, xb]) M.courtGlass.poly([[x, eave, za], [x, eave, zb], [x, ridge, zc]]);
+  }
+}
+
 // ------------------------------------------------------------------ write the file
 const palace = buildPalace();
 const textures = makeTextures();
@@ -425,6 +443,32 @@ for (const b of Object.values(M)) {
 }
 drawn = tris;
 
+// Every triangle in world space: the palace's modules where they stand, then the rest of the site.
+const worldPalace = expandPalace(palace, GROUND);
+const buckets = Object.values(M).filter((b) => b.idx.length);
+const world = (() => {
+  const extra = buckets.reduce((n, b) => n + b.idx.length / 3, 0), total = worldPalace.MID.length + extra;
+  const P = new Float32Array(total * 9), N = new Float32Array(total * 9), UV = new Float32Array(total * 6), MID = new Uint16Array(total);
+  P.set(worldPalace.P); N.set(worldPalace.N); UV.set(worldPalace.UV); MID.set(worldPalace.MID);
+  let t = worldPalace.MID.length;
+  buckets.forEach((b, bi) => {
+    for (let i = 0; i < b.idx.length; i++) { const v = b.idx[i] * 3; P.set(b.pos.slice(v, v + 3), t * 9 + (i % 3) * 3); N.set(b.norm.slice(v, v + 3), t * 9 + (i % 3) * 3); if (i % 3 === 2) MID[t++] = palace.names.length + bi; }
+  });
+  return { P, N, UV, MID };
+})();
+
+// Bake how open each corner of a module is to the sky, measured where one typical copy of it stands,
+// into its vertex colours: recesses, the undersides of cornices and the foot of the walls come out darker.
+const { occluded } = buildBvh(world.P);
+const TYPICAL = { Bay_A: [-40, 62], Bay_B: [-40, 62], Chimney: [-40, 68], Pavilion: [123, 0], Pavilion_Low: [-105, 73], Clock: [123, 0] };
+for (const [name, mod] of Object.entries(palace.modules)) {
+  const [tx, tz] = TYPICAL[name];
+  const at = palace.placements.filter((p) => p.module === name).sort((a, b) => Math.hypot(a.x - tx, a.z - tz) - Math.hypot(b.x - tx, b.z - tz))[0];
+  const one = expandPalace({ modules: palace.modules, placements: [at] }, GROUND);
+  const open = bakeOcclusion(occluded, one.P, one.N);
+  mod.SHADE = Float32Array.from(open, (v) => 0.3 + 0.7 * v);
+}
+
 // The palace: one mesh per module, drawn once for every place it stands.
 const palaceMaterials = palace.names.map((name) => {
   const [color, rough, metal] = PALACE_MATERIALS[name];
@@ -441,6 +485,7 @@ for (const [name, mod] of Object.entries(palace.modules)) {
     const take = (src, n) => { const out = new Float32Array(pick.length * 3 * n); pick.forEach((t, k) => { for (let i = 0; i < 3 * n; i++) out[k * 3 * n + i] = src[t * 3 * n + i]; }); return out; };
     mesh.addPrimitive(doc.createPrimitive()
       .setAttribute('POSITION', acc('VEC3', take(mod.P, 3))).setAttribute('NORMAL', acc('VEC3', take(mod.N, 3))).setAttribute('TEXCOORD_0', acc('VEC2', take(mod.UV, 2)))
+      .setAttribute('COLOR_0', acc('VEC3', (() => { const out = new Float32Array(pick.length * 9); pick.forEach((t, k) => { for (let i = 0; i < 3; i++) out.fill(mod.SHADE[t * 3 + i], k * 9 + i * 3, k * 9 + i * 3 + 3); }); return out; })()))
       .setIndices(acc('SCALAR', Uint32Array.from({ length: pick.length * 3 }, (_, i) => i)))
       .setMaterial(palaceMaterials[mi]));
   });
@@ -473,15 +518,7 @@ const dumpAt = process.argv.indexOf('--dump');
 if (dumpAt > 0) {
   const out = process.argv[dumpAt + 1];
   mkdirSync(out, { recursive: true });
-  const world = expandPalace(palace, GROUND);
-  const buckets = Object.values(M).filter((b) => b.idx.length);
-  const extra = buckets.reduce((n, b) => n + b.idx.length / 3, 0), total = world.MID.length + extra;
-  const P = new Float32Array(total * 9), N = new Float32Array(total * 9), UV = new Float32Array(total * 6), MID = new Uint16Array(total);
-  P.set(world.P); N.set(world.N); UV.set(world.UV); MID.set(world.MID);
-  let t = world.MID.length;
-  buckets.forEach((b, bi) => {
-    for (let i = 0; i < b.idx.length; i++) { const v = b.idx[i] * 3; P.set(b.pos.slice(v, v + 3), t * 9 + (i % 3) * 3); N.set(b.norm.slice(v, v + 3), t * 9 + (i % 3) * 3); if (i % 3 === 2) MID[t++] = palace.names.length + bi; }
-  });
+  const { P, N, UV, MID } = world, total = MID.length;
   const texKeys = Object.keys(textures);
   const mats = [
     ...palace.names.map((name) => { const [color, rough, metal, tex] = PALACE_MATERIALS[name]; return { name, color, rough, metal, opacity: 1, emissive: [0, 0, 0], map: tex ? texKeys.indexOf(tex) : -1, f0: /Glass/.test(name) ? 0.1 : undefined, ...(/Glass/.test(name) ? { metal: 0, rough: 0.02, color: [0.012, 0.014, 0.018] } : {}) }; }),
