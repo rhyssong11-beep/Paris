@@ -9,7 +9,7 @@
 | 파일 이름 (확장자 제외) | 랜드마크 |
 |---|---|
 | `eiffel` | Tour Eiffel |
-| `louvre` | Musée du Louvre (`louvre.glb`, `npm run model:louvre`로 생성. 미터 단위 그대로 사용되므로 크기 자동 맞춤 없음) |
+| `louvre` | Musée du Louvre (`louvre.glb`, `npm run model:louvre`로 생성. 미터 단위 그대로 사용되므로 크기 자동 맞춤 없음. 궁전은 외벽 한 칸·굴뚝·파빌리옹 모듈을 GPU 인스턴싱으로 반복 배치하며, `louvre/` 폴더의 PNG 텍스처 4장을 뷰어가 재료 이름으로 찾아 입힘) |
 | `arc` | Arc de Triomphe (`arc.glb`, `npm run model:arc`로 생성. 미터 단위 그대로 사용하며 개선문·에투알 광장·12개 방사형 대로·내부 옥상 계단 포함) |
 | `notredame` | Notre-Dame (`notredame.glb`, `npm run model:notredame`로 생성. 미터 단위 그대로 사용. 원본은 Higgsfield 3D Jutsu 프로젝트의 GLB 내보내기(`scripts/notredame/jutsu-export.glb`)이며, `notredame/` 폴더의 WebP 텍스처 8장을 뷰어가 재료 이름으로 찾아 입힘) |
 
@@ -62,3 +62,10 @@
 
 - 텍스처를 불러오지 못하면 재료의 단색으로 표시됩니다.
 - 성당 내부는 만들지 않았습니다. 실제 축은 정동에서 남쪽으로 조금 틀어져 있지만 모델과 주변은 축에 맞춰 직각으로 배치했습니다.
+
+## 루브르 모델과 텍스처
+
+- 모델은 약 **1.3 MB**입니다. 저장된 삼각형은 약 9만 개이고, 모듈을 반복해 그리는 삼각형은 약 187만 개입니다.
+- 궁전은 `scripts/louvre/palace.mjs`가 만드는 모듈 다섯 개(`Palace_Bay_A`, `Palace_Bay_B`, `Palace_Chimney`, `Palace_Pavilion`, `Palace_Clock`)로 이루어집니다. 외벽 한 칸에는 3층 창과 창살, 기둥, 코니스, 난간, 맨사드 지붕 절반, 도머 창이 들어 있습니다.
+- `louvre/` 폴더의 텍스처(`stone.png`, `trim.png`, `slate.png`, `lead.png`)는 `scripts/louvre/textures.mjs`가 코드로 만든 것입니다. 이어 붙일 수 있는 무늬이고, 모델의 UV는 몇 미터 단위로 반복됩니다.
+- 실제 궁전의 축은 조금 틀어져 있지만 모델은 동서 축에 맞춰 직각으로 배치했습니다. 파빌리옹은 모두 같은 모듈이고, 조각은 덩어리로 줄였습니다.

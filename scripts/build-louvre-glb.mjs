@@ -1,16 +1,23 @@
 // Generates the Louvre: the glass pyramid and its basins in the Cour Napoléon, the palace wings with
 // their pavilions, the Cour Carrée, the Arc de Triomphe du Carrousel and the Carrousel garden,
 // as a glTF 2.0 binary: public/models/louvre.glb
-// Usage: node scripts/build-louvre-glb.mjs
+// Usage: node scripts/build-louvre-glb.mjs [--dump <dir>]
+//
+// The palace itself comes from scripts/louvre/palace.mjs as a few modules (a façade bay, a chimney,
+// a domed pavilion) that the file repeats with GPU instancing, so the detail costs little to download.
+// --dump also writes every triangle in world space for scripts/louvre/pathtrace.mjs.
 //
 // Units are metres. The origin is the centre of the pyramid at ground level; +x is east along the
 // palace's long axis (towards the Cour Carrée), +z is south (towards the Seine), +y is up.
-// Dimensions follow the real site but are rounded, and sculpture is reduced to simple masses.
+// Dimensions follow the real site but are rounded, the palace is squared to the east-west axis, and
+// sculpture is reduced to simple masses.
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { Document, NodeIO } from '@gltf-transform/core';
-import { EXTMeshoptCompression, KHRMeshQuantization } from '@gltf-transform/extensions';
+import { EXTMeshGPUInstancing, EXTMeshoptCompression, KHRMeshQuantization } from '@gltf-transform/extensions';
 import { meshopt, weld } from '@gltf-transform/functions';
 import { MeshoptEncoder } from 'meshoptimizer';
+import { buildPalace, expandPalace, PALACE_MATERIALS } from './louvre/palace.mjs';
+import { encodePng, makeTextures } from './louvre/textures.mjs';
 
 // ------------------------------------------------------------------ mesh building
 
@@ -132,12 +139,8 @@ const rnd = () => ((seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0) / 4294
 // Names matter to the viewer: *Plaza_Stone* and *Park_Lawn* get paving and grass textures, *Glass*
 // and *Glow* light up at night, *Water*, *Foliage*, *Trunk*, *Curb* stay dark at night.
 const M = {
-  stone: new Bucket('Louvre_Stone', [0.8, 0.74, 0.62], { rough: 0.88 }), // pale Paris limestone
-  stoneTrim: new Bucket('Louvre_Stone_Trim', [0.87, 0.82, 0.71], { rough: 0.82 }), // cornices, pilasters, frames
-  stoneShade: new Bucket('Louvre_Stone_Shade', [0.45, 0.4, 0.33], { rough: 0.95 }), // arcade depths and reveals
-  slate: new Bucket('Louvre_Roof_Slate', [0.3, 0.34, 0.4], { rough: 0.55, metal: 0.25 }), // zinc and slate roofs
-  lead: new Bucket('Louvre_Roof_Lead', [0.52, 0.55, 0.57], { rough: 0.5, metal: 0.4 }), // ridge cresting and dormer caps
-  window: new Bucket('Palace_Window_Glass', [0.13, 0.17, 0.22], { rough: 0.15, metal: 0.6 }),
+  stone: new Bucket('Arch_Stone', [0.6, 0.5, 0.35], { rough: 0.9 }), // the Carrousel arch's limestone
+  stoneTrim: new Bucket('Arch_Stone_Trim', [0.66, 0.56, 0.4], { rough: 0.86 }),
   glass: new Bucket('Pyramid_Glass', [0.72, 0.86, 0.92], { rough: 0.05, metal: 0.1, alpha: 0.3 }),
   steel: new Bucket('Pyramid_Steel', [0.62, 0.65, 0.68], { rough: 0.35, metal: 0.85 }),
   glow: new Bucket('Pyramid_Glow', [0.93, 0.9, 0.82], { rough: 0.6 }), // the lit hall seen through the glass
@@ -160,207 +163,6 @@ const M = {
 
 // ------------------------------------------------------------------ the palace
 const GROUND = 0.3; // courtyard paving level
-const FLOOR = [GROUND, 9.2, 17.2, 23.2]; // ground floor, piano nobile, attic, cornice
-const EAVES = FLOOR[3];
-const BAY = 6.2; // spacing of windows along a façade
-
-/**
- * One façade: a vertical strip of wall from (ax, az) to (bx, bz) decorated on the side given by the
- * outward normal (nx, nz). Draws, for each bay, an arcade arch, a tall first-floor window with a
- * pediment and a square attic window, separated by pilasters and tied together by string courses.
- */
-function facade(ax, az, bx, bz, nx, nz, { height = EAVES, arcade = true, y0 = GROUND } = {}) {
-  const len = Math.hypot(bx - ax, bz - az);
-  const tx = (bx - ax) / len;
-  const tz = (bz - az) / len;
-  // Point at distance s along the façade, height y, pushed out from the wall by o.
-  const P = (s, y, o) => [ax + tx * s + nx * o, y, az + tz * s + nz * o];
-  // Upright rectangle from s0..s1, y0..y1 at offset o, facing outwards.
-  const panel = (bucket, s0, s1, ya, yb, o) => bucket.poly([P(s0, ya, o), P(s1, ya, o), P(s1, yb, o), P(s0, yb, o)], [nx, 0, nz]);
-  // Box standing proud of the wall by `out`: its front and the four thin sides.
-  const relief = (bucket, s0, s1, ya, yb, out) => {
-    panel(bucket, s0, s1, ya, yb, out);
-    bucket.poly([P(s0, yb, 0), P(s0, yb, out), P(s1, yb, out), P(s1, yb, 0)], [0, 1, 0]); // top
-    bucket.poly([P(s0, ya, out), P(s0, ya, 0), P(s1, ya, 0), P(s1, ya, out)], [0, -1, 0]); // underside
-    bucket.poly([P(s0, ya, 0), P(s0, ya, out), P(s0, yb, out), P(s0, yb, 0)], [-tx, 0, -tz]);
-    bucket.poly([P(s1, ya, out), P(s1, ya, 0), P(s1, yb, 0), P(s1, yb, out)], [tx, 0, tz]);
-  };
-  const scale = (height - y0) / (EAVES - GROUND);
-  const Y = (y) => y0 + (y - GROUND) * scale;
-
-  // Continuous horizontal elements.
-  relief(M.stoneTrim, 0, len, Y(GROUND), Y(GROUND + 1.1), 0.35); // plinth
-  relief(M.stoneTrim, 0, len, Y(FLOOR[1] - 0.7), Y(FLOOR[1]), 0.5); // string course over the arcade
-  relief(M.stoneTrim, 0, len, Y(FLOOR[2] - 0.45), Y(FLOOR[2]), 0.35);
-  relief(M.stoneTrim, 0, len, Y(EAVES - 1.0), Y(EAVES - 0.35), 0.55); // cornice
-  relief(M.stoneTrim, 0, len, Y(EAVES - 0.35), Y(EAVES), 0.85);
-  // Balustrade along the roof edge.
-  relief(M.stoneTrim, 0, len, Y(EAVES), Y(EAVES) + 0.25, 0.6);
-  relief(M.stoneTrim, 0, len, Y(EAVES) + 1.05, Y(EAVES) + 1.3, 0.6);
-
-  const bays = Math.max(1, Math.round(len / BAY));
-  const w = len / bays;
-  for (let i = 0; i <= bays; i++) {
-    // Pilaster on every bay line, with a simple capital; balustrade post above it.
-    const s = i * w;
-    const half = Math.min(0.55, w * 0.1);
-    const s0 = Math.max(0, s - half);
-    const s1 = Math.min(len, s + half);
-    relief(M.stoneTrim, s0, s1, Y(GROUND + 1.1), Y(FLOOR[1] - 0.7), 0.3);
-    relief(M.stoneTrim, s0, s1, Y(FLOOR[1]), Y(EAVES - 1.0), 0.28);
-    relief(M.stoneTrim, Math.max(0, s0 - 0.12), Math.min(len, s1 + 0.12), Y(FLOOR[2] - 1.1), Y(FLOOR[2] - 0.45), 0.4);
-    relief(M.stoneTrim, s0, s1, Y(EAVES) + 0.25, Y(EAVES) + 1.05, 0.55);
-  }
-  for (let i = 0; i < bays; i++) {
-    const c = (i + 0.5) * w;
-    const ww = Math.min(1.5, w * 0.27); // half-width of openings
-    if (arcade) {
-      // Round-headed arch: a dark recess with a keystone.
-      const top = Y(FLOOR[1] - 2.2);
-      const spring = top - ww;
-      panel(M.stoneShade, c - ww, c + ww, Y(GROUND + 0.25), spring, 0.04);
-      const fan = [P(c + ww, spring, 0.04)];
-      for (let k = 1; k <= 7; k++) {
-        const a = (k / 8) * Math.PI;
-        fan.push(P(c + Math.cos(a) * ww, spring + Math.sin(a) * ww, 0.04));
-      }
-      fan.push(P(c - ww, spring, 0.04));
-      M.stoneShade.poly(fan, [nx, 0, nz]);
-      relief(M.stoneTrim, c - 0.28, c + 0.28, top - 0.25, top + 0.75, 0.42);
-      panel(M.window, c - ww * 0.72, c + ww * 0.72, Y(GROUND + 1.0), spring - 0.3, 0.07);
-    } else {
-      panel(M.window, c - ww, c + ww, Y(GROUND + 2.2), Y(FLOOR[1] - 2.4), 0.05);
-      relief(M.stoneTrim, c - ww - 0.3, c + ww + 0.3, Y(GROUND + 1.9), Y(GROUND + 2.2), 0.3);
-      relief(M.stoneTrim, c - ww - 0.3, c + ww + 0.3, Y(FLOOR[1] - 2.4), Y(FLOOR[1] - 2.05), 0.35);
-    }
-    // First floor: tall window, sill, and a pediment that alternates triangular / flat.
-    const a0 = Y(FLOOR[1] + 1.1);
-    const a1 = Y(FLOOR[2] - 2.3);
-    panel(M.window, c - ww, c + ww, a0, a1, 0.05);
-    panel(M.stoneTrim, c - 0.07, c + 0.07, a0, a1, 0.09); // mullion
-    panel(M.stoneTrim, c - ww, c + ww, a0 + (a1 - a0) * 0.62, a0 + (a1 - a0) * 0.62 + 0.14, 0.09); // transom
-    relief(M.stoneTrim, c - ww - 0.35, c + ww + 0.35, a0 - 0.32, a0, 0.4);
-    relief(M.stoneTrim, c - ww - 0.3, c - ww, a0, a1, 0.2);
-    relief(M.stoneTrim, c + ww, c + ww + 0.3, a0, a1, 0.2);
-    relief(M.stoneTrim, c - ww - 0.45, c + ww + 0.45, a1, a1 + 0.3, 0.45);
-    if (i % 2 === 0) {
-      const apex = a1 + 0.3 + ww * 0.55;
-      M.stoneTrim.poly([P(c - ww - 0.45, a1 + 0.3, 0.45), P(c + ww + 0.45, a1 + 0.3, 0.45), P(c, apex, 0.45)], [nx, 0, nz]);
-      M.stoneTrim.poly([P(c - ww - 0.45, a1 + 0.3, 0), P(c - ww - 0.45, a1 + 0.3, 0.45), P(c, apex, 0.45), P(c, apex, 0)]);
-      M.stoneTrim.poly([P(c + ww + 0.45, a1 + 0.3, 0.45), P(c + ww + 0.45, a1 + 0.3, 0), P(c, apex, 0), P(c, apex, 0.45)]);
-    }
-    // Attic: square window with a frame.
-    const b0 = Y(FLOOR[2] + 1.0);
-    const b1 = Y(EAVES - 1.6);
-    panel(M.window, c - ww * 0.8, c + ww * 0.8, b0, b1, 0.05);
-    relief(M.stoneTrim, c - ww * 0.8 - 0.25, c + ww * 0.8 + 0.25, b0 - 0.25, b0, 0.3);
-    relief(M.stoneTrim, c - ww * 0.8 - 0.25, c + ww * 0.8 + 0.25, b1, b1 + 0.25, 0.3);
-  }
-}
-
-/** Dormer window sitting on a roof slope, facing along (nx, nz), centred at (x, z) on the eaves line. */
-function dormer(x, z, nx, nz, y) {
-  const tx = -nz;
-  const tz = nx;
-  const P = (s, h, o) => [x + tx * s - nx * o, y + h, z + tz * s - nz * o];
-  const front = [P(-0.9, 0.6, 1.2), P(0.9, 0.6, 1.2), P(0.9, 2.6, 1.2), P(0, 3.3, 1.2), P(-0.9, 2.6, 1.2)];
-  M.stoneTrim.poly(front, [nx, 0, nz]);
-  M.window.poly([P(-0.55, 0.9, 1.14), P(0.55, 0.9, 1.14), P(0.55, 2.4, 1.14), P(-0.55, 2.4, 1.14)], [nx, 0, nz]);
-  // Cheeks and the little pitched roof running back into the slope.
-  M.stoneTrim.poly([P(-0.9, 0.6, 1.2), P(-0.9, 2.6, 1.2), P(-0.9, 2.6, 3.4)]);
-  M.stoneTrim.poly([P(0.9, 2.6, 1.2), P(0.9, 0.6, 1.2), P(0.9, 2.6, 3.4)]);
-  M.lead.poly([P(-0.9, 2.6, 1.2), P(0, 3.3, 1.2), P(0, 3.3, 4.2), P(-0.9, 2.6, 3.4)]);
-  M.lead.poly([P(0, 3.3, 1.2), P(0.9, 2.6, 1.2), P(0.9, 2.6, 3.4), P(0, 3.3, 4.2)]);
-}
-
-/**
- * A range of the palace: a long building between (x0, z0) and (x1, z1) with façades on all four
- * sides (or only those listed), a mansard roof with dormers, a lead ridge and chimneys.
- */
-function wing(x0, z0, x1, z1, { sides = 'nsew', arcade = 'nsew', height = EAVES, roof = 7.5 } = {}) {
-  M.stone.box(x0, 0, z0, x1, height, z1, { capTop: false });
-  const fac = (side, ...args) => sides.includes(side) && facade(...args, { height, arcade: arcade.includes(side) });
-  fac('n', x1, z0, x0, z0, 0, -1);
-  fac('s', x0, z1, x1, z1, 0, 1);
-  fac('w', x0, z0, x0, z1, -1, 0);
-  fac('e', x1, z1, x1, z0, 1, 0);
-  // Mansard: steep lower slope, then a shallow cap.
-  const d1 = 2.2;
-  const d2 = Math.min(5.5, (Math.min(x1 - x0, z1 - z0) / 2) * 0.8);
-  M.stone.box(x0, height, z0, x1, height + 0.02, z1); // gutter level behind the balustrade
-  M.slate.loft(inset(x0, z0, x1, z1, 0.9), height, inset(x0, z0, x1, z1, 0.9 + d1), height + roof * 0.72, { capTop: false });
-  M.slate.loft(inset(x0, z0, x1, z1, 0.9 + d1), height + roof * 0.72, inset(x0, z0, x1, z1, 0.9 + d2), height + roof);
-  M.lead.loft(inset(x0, z0, x1, z1, 0.6 + d2), height + roof, inset(x0, z0, x1, z1, 0.9 + d2), height + roof + 0.5);
-  const long = x1 - x0 > z1 - z0;
-  const length = long ? x1 - x0 : z1 - z0;
-  const count = Math.max(1, Math.round(length / (BAY * 2)));
-  for (let i = 0; i < count; i++) {
-    const s = ((i + 0.5) / count) * length;
-    if (long) {
-      if (sides.includes('n')) dormer(x0 + s, z0 + 0.9, 0, -1, height);
-      if (sides.includes('s')) dormer(x0 + s, z1 - 0.9, 0, 1, height);
-    } else {
-      if (sides.includes('w')) dormer(x0 + 0.9, z0 + s, -1, 0, height);
-      if (sides.includes('e')) dormer(x1 - 0.9, z0 + s, 1, 0, height);
-    }
-    if (i % 3 === 1) {
-      // Chimney stack on the ridge.
-      const cx = long ? x0 + s + BAY : (x0 + x1) / 2;
-      const cz = long ? (z0 + z1) / 2 : z0 + s + BAY;
-      M.stoneTrim.box(cx - 0.9, height + roof - 0.5, cz - 0.6, cx + 0.9, height + roof + 2.6, cz + 0.6);
-      M.stoneShade.box(cx - 1.05, height + roof + 2.6, cz - 0.75, cx + 1.05, height + roof + 2.9, cz + 0.75);
-    }
-  }
-}
-
-/**
- * A pavilion: a taller block that punctuates the wings, with a steep square dome and a lantern.
- * `out` pushes it forward of the wing line on the listed sides so it reads as a projection.
- */
-function pavilion(cx, cz, w, d, { height = 31, dome = 13, sides = 'nsew', clock = false } = {}) {
-  const x0 = cx - w / 2, x1 = cx + w / 2, z0 = cz - d / 2, z1 = cz + d / 2;
-  M.stone.box(x0, 0, z0, x1, height, z1, { capTop: false });
-  const fac = (side, ...args) => sides.includes(side) && facade(...args, { height, arcade: true });
-  fac('n', x1, z0, x0, z0, 0, -1);
-  fac('s', x0, z1, x1, z1, 0, 1);
-  fac('w', x0, z0, x0, z1, -1, 0);
-  fac('e', x1, z1, x1, z0, 1, 0);
-  // Corner piers to make the block read as heavier than the wings.
-  for (const [px, pz] of [[x0, z0], [x1, z0], [x0, z1], [x1, z1]]) M.stoneTrim.box(px - 0.7, 0, pz - 0.7, px + 0.7, height + 1.3, pz + 0.7);
-  // Square dome: four curved slopes built from stacked rings.
-  M.stone.box(x0, height, z0, x1, height + 0.02, z1);
-  const rings = 6;
-  let prev = inset(x0, z0, x1, z1, 1.0);
-  let prevY = height;
-  for (let k = 1; k <= rings; k++) {
-    const t = k / rings;
-    const shrink = 1.0 + (Math.min(w, d) / 2 - 3.2) * (1 - Math.cos((t * Math.PI) / 2));
-    const y = height + dome * Math.sin((t * Math.PI) / 2);
-    const next = inset(x0, z0, x1, z1, shrink);
-    M.slate.loft(prev, prevY, next, y, { capTop: k === rings });
-    prev = next;
-    prevY = y;
-  }
-  // Lantern and cresting.
-  M.lead.loft(inset(x0, z0, x1, z1, Math.min(w, d) / 2 - 2.6), prevY, inset(x0, z0, x1, z1, Math.min(w, d) / 2 - 2.2), prevY + 1.6);
-  M.lead.cyl(cx, cz, 0.5, prevY + 1.6, 0.05, prevY + 5.5, 6);
-  // Round "oeil-de-boeuf" windows in the dome.
-  for (const [nx, nz] of [[0, -1], [0, 1], [-1, 0], [1, 0]]) {
-    const side = nx ? (nx < 0 ? 'w' : 'e') : nz < 0 ? 'n' : 's';
-    if (!sides.includes(side)) continue;
-    dormer(cx + nx * (w / 2 - 1.0), cz + nz * (d / 2 - 1.0), nx, nz, height + 0.4);
-  }
-  if (clock) {
-    // The Pavillon de l'Horloge's clock on its west face.
-    const y = height - 4.5;
-    const face = Array.from({ length: 16 }, (_, k) => {
-      const a = (k / 16) * Math.PI * 2;
-      return [x0 - 0.62, y + Math.sin(a) * 1.9, cz + Math.cos(a) * 1.9];
-    });
-    M.gilt.poly(face, [-1, 0, 0]);
-    M.stoneTrim.box(x0 - 0.6, y - 2.6, cz - 2.6, x0, y + 2.6, cz + 2.6);
-  }
-}
 
 // ---- Layout (metres) ---------------------------------------------------------------------------
 const COURT_HALF = 62; // half-width of the Cour Napoléon (north-south)
@@ -371,44 +173,9 @@ const EAST = 112; // west face of the Cour Carrée block
 const CARRE = 172; // outer size of the Cour Carrée
 const FAR_WEST = -470; // Pavillons de Marsan and de Flore
 
-// Cour Napoléon: inner ranges facing the pyramid (Richelieu to the north, Denon to the south).
-for (const s of [-1, 1]) {
-  const zi = s * COURT_HALF; // façade on the courtyard
-  const zo = s * (COURT_HALF + DEPTH);
-  wing(WEST + 16, Math.min(zi, zo), EAST, Math.max(zi, zo), { sides: 'ns' });
-  // Outer range along the street / the river, running the whole length of the palace.
-  const oi = s * (OUTER - DEPTH);
-  const oo = s * OUTER;
-  wing(FAR_WEST + 16, Math.min(oi, oo), EAST + CARRE, Math.max(oi, oo), { sides: 'ns', arcade: s < 0 ? 'n' : '' });
-  // Cross ranges closing the three inner courts on each side.
-  for (const x of [WEST + 16, -52, 28, EAST - DEPTH]) {
-    wing(x, Math.min(zo, oi), x + DEPTH, Math.max(zo, oi), { sides: 'ew', arcade: '' });
-  }
-  // Pavilions: ends and centres of the courtyard ranges (Turgot/Richelieu/Colbert, Mollien/Denon/Daru).
-  pavilion(WEST + 8, s * (COURT_HALF + DEPTH / 2 + 4), 30, DEPTH + 14, { sides: 'nsw' });
-  pavilion(-8, s * (COURT_HALF + DEPTH / 2 - 1.5), 34, DEPTH + 3, { height: 33, dome: 14, sides: s < 0 ? 's' : 'n' });
-  pavilion(EAST - 26, s * (COURT_HALF + DEPTH / 2 - 1.5), 26, DEPTH + 3, { sides: s < 0 ? 's' : 'n' });
-  // Far-west end pavilions (Marsan to the north, Flore to the south) and mid-length ones.
-  pavilion(FAR_WEST + 4, s * (OUTER - DEPTH / 2 - 4), 34, DEPTH + 14, { height: 33, dome: 15 });
-  pavilion(-300, s * (OUTER - DEPTH / 2), 28, DEPTH + 5, { sides: 'ns' });
-  pavilion(WEST + 8, s * (OUTER - DEPTH / 2), 28, DEPTH + 5, { sides: 'ns' });
-}
-
 // Cour Carrée: a square of four ranges around a court, east of the Cour Napoléon.
 {
   const x0 = EAST, x1 = EAST + CARRE, h = CARRE / 2;
-  wing(x0, -h + DEPTH, x0 + DEPTH, h - DEPTH, { sides: 'ew' }); // west range (Sully)
-  wing(x1 - DEPTH, -h + DEPTH, x1, h - DEPTH, { sides: 'ew' }); // east range (the Colonnade side)
-  wing(x0, -h, x1, -h + DEPTH, { sides: 'ns' });
-  wing(x0, h - DEPTH, x1, h, { sides: 'ns' });
-  // Link the square to the outer ranges, which sit further out than the Cour Carrée's own.
-  for (const s of [-1, 1]) wing(x0, Math.min(s * h, s * (OUTER - DEPTH)), x0 + DEPTH, Math.max(s * h, s * (OUTER - DEPTH)), { sides: 'ew', arcade: '' });
-  // Pavillon de l'Horloge facing the pyramid, the matching east pavilion, and the centres of the other sides.
-  pavilion(x0 + DEPTH / 2, 0, DEPTH + 6, 36, { height: 36, dome: 16, clock: true });
-  pavilion(x1 - DEPTH / 2, 0, DEPTH + 6, 32, { height: 33, dome: 13 });
-  pavilion((x0 + x1) / 2, -h + DEPTH / 2, 30, DEPTH + 5, { sides: 'ns' });
-  pavilion((x0 + x1) / 2, h - DEPTH / 2, 30, DEPTH + 5, { sides: 'ns' });
-  for (const [sx, sz] of [[0, -1], [1, -1], [0, 1], [1, 1]]) pavilion(sx ? x1 - DEPTH / 2 : x0 + DEPTH / 2, sz * (h - DEPTH / 2), DEPTH + 5, DEPTH + 5);
   // The court itself: paving, a round lawn and a fountain basin.
   const cx = (x0 + x1) / 2;
   M.gravel.box(x0 + DEPTH, 0, -h + DEPTH, x1 - DEPTH, GROUND, h - DEPTH);
@@ -574,12 +341,15 @@ for (const s of [-1, 1]) {
 }
 
 // ------------------------------------------------------------------ write the file
+const palace = buildPalace();
+const textures = makeTextures();
 const doc = new Document();
 doc.getRoot().getAsset().generator = 'Paris vivant Louvre 3D builder (CC0)';
 const buffer = doc.createBuffer();
 const scene = doc.createScene('Musee_du_Louvre');
+const acc = (type, array) => doc.createAccessor().setType(type).setArray(array).setBuffer(buffer);
 let tris = 0;
-let verts = 0;
+let drawn = 0;
 for (const b of Object.values(M)) {
   if (!b.idx.length) continue;
   const material = doc.createMaterial(b.name)
@@ -589,19 +359,79 @@ for (const b of Object.values(M)) {
   if (b.alpha < 1) material.setAlphaMode('BLEND').setDoubleSided(true);
   if (b.emissive) material.setEmissiveFactor(b.emissive);
   const prim = doc.createPrimitive()
-    .setAttribute('POSITION', doc.createAccessor().setType('VEC3').setArray(new Float32Array(b.pos)).setBuffer(buffer))
-    .setAttribute('NORMAL', doc.createAccessor().setType('VEC3').setArray(new Float32Array(b.norm)).setBuffer(buffer))
-    .setIndices(doc.createAccessor().setType('SCALAR').setArray(new Uint32Array(b.idx)).setBuffer(buffer))
+    .setAttribute('POSITION', acc('VEC3', new Float32Array(b.pos)))
+    .setAttribute('NORMAL', acc('VEC3', new Float32Array(b.norm)))
+    .setIndices(acc('SCALAR', new Uint32Array(b.idx)))
     .setMaterial(material);
   scene.addChild(doc.createNode(b.name).setMesh(doc.createMesh(b.name).addPrimitive(prim)));
   tris += b.idx.length / 3;
-  verts += b.pos.length / 3;
 }
+drawn = tris;
+
+// The palace: one mesh per module, drawn once for every place it stands.
+const palaceMaterials = palace.names.map((name) => {
+  const [color, rough, metal] = PALACE_MATERIALS[name];
+  const m = doc.createMaterial(name).setBaseColorFactor([...color, 1]).setRoughnessFactor(rough).setMetallicFactor(metal).setDoubleSided(true);
+  return m;
+});
+const instancing = doc.createExtension(EXTMeshGPUInstancing).setRequired(true);
+for (const [name, mod] of Object.entries(palace.modules)) {
+  const mesh = doc.createMesh(`Palace_${name}`);
+  palace.names.forEach((_, mi) => {
+    const pick = [];
+    mod.MID.forEach((m, t) => { if (m === mi) pick.push(t); });
+    if (!pick.length) return;
+    const take = (src, n) => { const out = new Float32Array(pick.length * 3 * n); pick.forEach((t, k) => { for (let i = 0; i < 3 * n; i++) out[k * 3 * n + i] = src[t * 3 * n + i]; }); return out; };
+    mesh.addPrimitive(doc.createPrimitive()
+      .setAttribute('POSITION', acc('VEC3', take(mod.P, 3))).setAttribute('NORMAL', acc('VEC3', take(mod.N, 3))).setAttribute('TEXCOORD_0', acc('VEC2', take(mod.UV, 2)))
+      .setIndices(acc('SCALAR', Uint32Array.from({ length: pick.length * 3 }, (_, i) => i)))
+      .setMaterial(palaceMaterials[mi]));
+  });
+  const at = palace.placements.filter((p) => p.module === name);
+  const T = new Float32Array(at.length * 3), R = new Float32Array(at.length * 4), S = new Float32Array(at.length * 3);
+  at.forEach((p, i) => {
+    const half = Math.atan2(-p.dz, p.dx) / 2;
+    T.set([p.x, GROUND, p.z], i * 3); R.set([0, Math.sin(half), 0, Math.cos(half)], i * 4); S.set([p.sx, 1, p.sz], i * 3);
+  });
+  const batch = instancing.createInstancedMesh().setAttribute('TRANSLATION', acc('VEC3', T)).setAttribute('ROTATION', acc('VEC4', R)).setAttribute('SCALE', acc('VEC3', S));
+  scene.addChild(doc.createNode(`Palace_${name}`).setMesh(mesh).setExtension('EXT_mesh_gpu_instancing', batch));
+  tris += mod.MID.length;
+  drawn += mod.MID.length * at.length;
+}
+
 await MeshoptEncoder.ready;
-const io = new NodeIO().registerExtensions([EXTMeshoptCompression, KHRMeshQuantization]).registerDependencies({ 'meshopt.encoder': MeshoptEncoder });
-await doc.transform(weld(), meshopt({ encoder: MeshoptEncoder, level: 'medium', quantizePosition: 16, quantizeNormal: 10 }));
+const io = new NodeIO().registerExtensions([EXTMeshGPUInstancing, EXTMeshoptCompression, KHRMeshQuantization]).registerDependencies({ 'meshopt.encoder': MeshoptEncoder });
+await doc.transform(weld(), meshopt({ encoder: MeshoptEncoder, level: 'medium', quantizePosition: 16, quantizeNormal: 10, quantizeTexcoord: 14 }));
 const dir = new URL('../public/models/', import.meta.url);
 mkdirSync(dir, { recursive: true });
 const glb = await io.writeBinary(doc);
 writeFileSync(new URL('louvre.glb', dir), glb);
-console.log(`wrote public/models/louvre.glb: ${(glb.byteLength / 1e6).toFixed(2)} MB — ${Object.values(M).filter((b) => b.idx.length).length} materials, ${verts.toLocaleString()} vertices, ${tris.toLocaleString()} triangles`);
+// The viewer applies these by material name (see applyLouvreTextures), as it does for Notre-Dame.
+mkdirSync(new URL('louvre/', dir), { recursive: true });
+for (const [key, image] of Object.entries(textures)) writeFileSync(new URL(`louvre/${key}.png`, dir), encodePng(image));
+console.log(`wrote public/models/louvre.glb: ${(glb.byteLength / 1e6).toFixed(2)} MB — ${tris.toLocaleString()} triangles stored, ${drawn.toLocaleString()} drawn (${palace.placements.length} module placements)`);
+
+// ------------------------------------------------------------------ world-space dump for the path tracer
+const dumpAt = process.argv.indexOf('--dump');
+if (dumpAt > 0) {
+  const out = process.argv[dumpAt + 1];
+  mkdirSync(out, { recursive: true });
+  const world = expandPalace(palace, GROUND);
+  const buckets = Object.values(M).filter((b) => b.idx.length);
+  const extra = buckets.reduce((n, b) => n + b.idx.length / 3, 0), total = world.MID.length + extra;
+  const P = new Float32Array(total * 9), N = new Float32Array(total * 9), UV = new Float32Array(total * 6), MID = new Uint16Array(total);
+  P.set(world.P); N.set(world.N); UV.set(world.UV); MID.set(world.MID);
+  let t = world.MID.length;
+  buckets.forEach((b, bi) => {
+    for (let i = 0; i < b.idx.length; i++) { const v = b.idx[i] * 3; P.set(b.pos.slice(v, v + 3), t * 9 + (i % 3) * 3); N.set(b.norm.slice(v, v + 3), t * 9 + (i % 3) * 3); if (i % 3 === 2) MID[t++] = palace.names.length + bi; }
+  });
+  const texKeys = Object.keys(textures);
+  const mats = [
+    ...palace.names.map((name) => { const [color, rough, metal, tex] = PALACE_MATERIALS[name]; return { name, color, rough, metal, opacity: 1, emissive: [0, 0, 0], map: tex ? texKeys.indexOf(tex) : -1, f0: /Glass/.test(name) ? 0.1 : undefined, ...(/Glass/.test(name) ? { metal: 0, rough: 0.02, color: [0.012, 0.014, 0.018] } : {}) }; }),
+    ...buckets.map((b) => ({ name: b.name, color: b.color, rough: b.rough, metal: b.metal, opacity: b.alpha, emissive: [0, 0, 0], map: -1 })),
+  ];
+  const texs = texKeys.map((k) => ({ w: textures[k].w, h: textures[k].h, data: Array.from(textures[k].data), m: [1, 0, 0, 0, 1, 0, 0, 0, 1], flipY: false }));
+  writeFileSync(`${out}/scene.json`, JSON.stringify({ mats, texs }));
+  for (const [name, a] of Object.entries({ P, N, UV, MID })) writeFileSync(`${out}/${name}.bin`, Buffer.from(a.buffer));
+  console.log(`dumped ${total.toLocaleString()} world-space triangles to ${out}`);
+}

@@ -182,3 +182,33 @@ export function buildLouvreNightLights() {
   group.add(hall);
   return group;
 }
+
+/** Texture file under models/louvre/ for each palace material; the model's UVs are in tiles of a few metres. */
+const TEXTURES: Record<string, string> = {
+  Louvre_Stone: 'stone', Louvre_Stone_Trim: 'trim', Louvre_Sculpture: 'trim', Louvre_Roof_Slate: 'slate', Louvre_Roof_Lead: 'lead',
+};
+
+/** Puts the masonry, slate and lead textures on the palace. Until one loads its material keeps its plain colour. */
+export function applyLouvreTextures(model: THREE.Object3D, baseUrl: string, anisotropy: number, own: (dispose: () => void) => void) {
+  const loader = new THREE.TextureLoader();
+  const loaded = new Map<string, THREE.Texture>();
+  const seen = new Set<THREE.Material>();
+  model.traverse((o) => {
+    const mat = (o as THREE.Mesh).material as THREE.MeshStandardMaterial | undefined;
+    const file = mat && !Array.isArray(mat) ? TEXTURES[mat.name] : undefined;
+    if (!mat || !file || seen.has(mat)) return;
+    seen.add(mat);
+    let texture = loaded.get(file);
+    if (!texture) {
+      texture = loader.load(`${baseUrl}${file}.png`);
+      texture.flipY = false; // glTF texture coordinates
+      texture.colorSpace = THREE.SRGBColorSpace;
+      texture.anisotropy = anisotropy;
+      texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
+      loaded.set(file, texture);
+      own(() => loaded.get(file)!.dispose());
+    }
+    mat.map = texture;
+    mat.needsUpdate = true;
+  });
+}

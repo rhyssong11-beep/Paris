@@ -22,7 +22,7 @@ import { disposeObject } from './viewer-resources';
 import { QUALITY, ViewerQuality } from './viewer-quality';
 import { buildCity } from './viewer-city';
 import { buildStreets } from './viewer-streets';
-import { buildLouvreNightLights, buildLouvreSurroundings } from './viewer-louvre';
+import { applyLouvreTextures, buildLouvreNightLights, buildLouvreSurroundings } from './viewer-louvre';
 import { buildArcNightLights, buildArcSurroundings } from './viewer-arc';
 import { applyNotreDameTextures, buildNotreDameNightLights, buildNotreDameSurroundings } from './viewer-notredame';
 
@@ -344,6 +344,7 @@ async function buildViewer(opts: ViewerOptions, root: HTMLElement, signal: Abort
   scene.add(model);
   plaza.visible = usingFallback;
   applyGroundTextures(model, renderer.capabilities.getMaxAnisotropy());
+  if (site?.kind === 'louvre') applyLouvreTextures(model, `${base}models/louvre/`, renderer.capabilities.getMaxAnisotropy(), own);
   if (site?.kind === 'notredame') applyNotreDameTextures(model, `${base}models/notredame/`, renderer.capabilities.getMaxAnisotropy(), own);
   note.textContent = usingFallback ? '간략 모델 · 상세 모델을 불러오지 못했습니다.' : (opts.credit ?? '');
   root.querySelector('.v-loading')!.remove();

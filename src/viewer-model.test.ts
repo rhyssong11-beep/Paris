@@ -48,9 +48,26 @@ it('decodes the shipped Louvre model: pyramid at the origin, open courtyard, pal
     expect(hitY(-40, -75)).toBeGreaterThan(23); // the Richelieu wing's roof
     expect(hitY(-262, 0)).toBeGreaterThan(14); // the Carrousel arch
     expect(hitY(198, 40)).toBeLessThan(1); // inside the Cour Carrée
-    for (const name of ['Louvre_Stone', 'Louvre_Roof_Slate', 'Palace_Window_Glass', 'Pyramid_Steel', 'Pyramid_Glow', 'Basin_Water', 'Plaza_Stone', 'Park_Lawn']) {
+    expect(hitY(126, 4)).toBeGreaterThan(40); // the dome of the Pavillon de l'Horloge
+    expect(hitY(119, 30)).toBeGreaterThan(26); // the Sully wing's roof, between eaves and ridge
+    expect(hitY(119, 30)).toBeLessThan(32);
+    for (const name of ['Pyramid_Steel', 'Pyramid_Glow', 'Basin_Water', 'Plaza_Stone', 'Park_Lawn']) {
       expect(scene.getObjectByName(name), name).toBeTruthy();
     }
+    // The palace is a handful of modules repeated with GPU instancing.
+    const instances: Record<string, number> = {};
+    const materials = new Set<string>();
+    scene.traverse((o) => {
+      const mesh = o as THREE.InstancedMesh;
+      if (!mesh.isInstancedMesh) return;
+      instances[o.parent!.name] = mesh.count;
+      materials.add((mesh.material as THREE.Material).name);
+      expect(mesh.geometry.getAttribute('uv'), o.name).toBeTruthy(); // the viewer's masonry textures need them
+    });
+    expect(instances.Palace_Bay_A + instances.Palace_Bay_B).toBeGreaterThan(700);
+    expect(instances.Palace_Pavilion).toBe(22);
+    expect(instances.Palace_Clock).toBe(1);
+    for (const name of ['Louvre_Stone', 'Louvre_Stone_Trim', 'Louvre_Roof_Slate', 'Louvre_Roof_Lead', 'Palace_Window_Glass']) expect(materials.has(name), name).toBe(true);
   } finally { disposeObject(scene); }
 });
 
