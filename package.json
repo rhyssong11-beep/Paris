@@ -13,6 +13,7 @@
     "model:eiffel": "node scripts/build-eiffel-glb.mjs",
     "model:louvre": "node scripts/build-louvre-glb.mjs",
     "model:arc": "node scripts/build-arc-glb.mjs",
+    "model:notredame": "node scripts/build-notredame-glb.mjs",
     "test:browser": "playwright test"
   },
   "devDependencies": {

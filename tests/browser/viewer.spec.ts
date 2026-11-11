@@ -339,3 +339,51 @@ test('open the Arc de Triomphe in 3D and walk beneath its central vault', async 
   await expect(page.locator('#viewer')).toHaveCount(0);
   expect(errors).toEqual([]);
 });
+
+test('open Notre-Dame in 3D with its textures and walk across the parvis to the central portal', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  await page.waitForFunction(() => (window as any).view?.width === window.innerWidth);
+  const point = await page.evaluate(() => {
+    const { sim, view } = (window as any);
+    const poi = sim.data.pois.find((p: any) => p.name === 'Notre-Dame');
+    view.cam.x = poi.x; view.cam.y = poi.y; view.cam.k = 0.5; view.invalidate();
+    const [x, y] = view.toScreen(poi.x, poi.y);
+    return { x, y: y - 6 };
+  });
+  await page.mouse.move(point.x, point.y);
+  await expect(page.locator('#tip')).toContainText('클릭해서 3D로 보기');
+  await page.mouse.click(point.x, point.y);
+  await expect(page.locator('#viewer h2')).toHaveText('Notre-Dame');
+  await expect(page.locator('#viewer .v-loading')).toHaveCount(0);
+  expect(await page.evaluate(() => (window as any).viewer3d.usingFallback)).toBe(false);
+  // The rose windows, lancets, tympanum, doors, stone and lead all receive their pictures.
+  await page.waitForFunction(() => {
+    const maps = new Set<string>();
+    (window as any).viewer3d.scene.traverse((o: any) => { if (/^NotreDame_/.test(o.name) && o.material?.map?.image) maps.add(o.material.name); });
+    return maps.size === 9;
+  });
+  expect(await page.evaluate(() => {
+    const rose = (window as any).viewer3d.scene.getObjectByName('NotreDame_Vitrail_Glow_RoseWest');
+    return rose.material.emissiveMap === rose.material.map;
+  })).toBe(true);
+  await page.locator('#viewer [data-act=night]').click();
+
+  await page.locator('#viewer [data-act=walk]').click();
+  await page.waitForFunction(() => (window as any).viewer3d.walk.active && (window as any).viewer3d.walk.walker);
+  const start = await page.evaluate(() => ({ ...(window as any).viewer3d.walk.walker }));
+  expect(start.x).toBeCloseTo(-112, 0);
+  const end = await page.evaluate(() => {
+    const { walk } = (window as any).viewer3d;
+    const w = walk.walker;
+    w.place(-112, 1.6, -Math.PI / 2); // facing east, towards the Portal of the Last Judgment
+    for (let t = 0; t < 8; t += 1 / 60) w.step({ forward: 1, right: 0, run: false }, 1 / 60);
+    return { x: w.x };
+  });
+  expect(end.x).toBeGreaterThan(-66);
+  expect(end.x).toBeLessThan(-61.5);
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('Escape');
+  await expect(page.locator('#viewer')).toHaveCount(0);
+  expect(errors).toEqual([]);
+});
