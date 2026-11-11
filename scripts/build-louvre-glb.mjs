@@ -466,7 +466,7 @@ for (const [name, mod] of Object.entries(palace.modules)) {
   const at = palace.placements.filter((p) => p.module === name).sort((a, b) => Math.hypot(a.x - tx, a.z - tz) - Math.hypot(b.x - tx, b.z - tz))[0];
   const one = expandPalace({ modules: palace.modules, placements: [at] }, GROUND);
   const open = bakeOcclusion(occluded, one.P, one.N);
-  mod.SHADE = Float32Array.from(open, (v) => 0.3 + 0.7 * v);
+  mod.SHADE = Float32Array.from(open, (v) => 0.42 + 0.58 * Math.min(1, v * 1.15)); // open walls stay at full brightness
 }
 
 // The palace: one mesh per module, drawn once for every place it stands.

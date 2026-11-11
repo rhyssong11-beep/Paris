@@ -12,9 +12,9 @@ export const TILE = {
 };
 /** name: [sRGB-linear colour, roughness, metalness, texture key] */
 export const PALACE_MATERIALS = {
-  Louvre_Stone: [[0.8, 0.69, 0.5], 0.92, 0, 'stone'],
-  Louvre_Stone_Trim: [[0.86, 0.75, 0.55], 0.88, 0, 'trim'],
-  Louvre_Sculpture: [[0.82, 0.71, 0.52], 0.9, 0, 'trim'],
+  Louvre_Stone: [[0.9, 0.79, 0.6], 0.92, 0, 'stone'],
+  Louvre_Stone_Trim: [[0.95, 0.85, 0.65], 0.88, 0, 'trim'],
+  Louvre_Sculpture: [[0.9, 0.8, 0.6], 0.9, 0, 'trim'],
   Palace_Window_Glass: [[0.03, 0.04, 0.055], 0.06, 0.6, null],
   Palace_Window_Frame: [[0.62, 0.6, 0.55], 0.6, 0, null],
   Louvre_Roof_Slate: [[0.44, 0.48, 0.55], 0.62, 0, 'slate'],

@@ -258,7 +258,8 @@ async function buildViewer(opts: ViewerOptions, root: HTMLElement, signal: Abort
 
   // Ground: a soft-edged disc so the horizon fades into the sky.
   const groundMat = new THREE.MeshStandardMaterial({ color: 0x8a8577, roughness: 1, metalness: 0 });
-  const ground = new THREE.Mesh(new THREE.CircleGeometry(H * 12, 96), groundMat);
+  // The Louvre's ground leaves a hole under the main pyramid, where the paving opens onto the hall below.
+  const ground = new THREE.Mesh(site?.kind === 'louvre' ? new THREE.RingGeometry(24.5, H * 12, 96) : new THREE.CircleGeometry(H * 12, 96), groundMat);
   ground.rotation.x = -Math.PI / 2;
   ground.receiveShadow = true;
   const plaza = new THREE.Mesh(
